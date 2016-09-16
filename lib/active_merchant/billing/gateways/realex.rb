@@ -20,6 +20,7 @@ module ActiveMerchant
     # same order id
     class RealexGateway < Gateway
       self.live_url = self.test_url = 'https://epage.payandshop.com/epage-remote.cgi'
+      PLUGINS_URL = 'https://epage.payandshop.com/epage-remote-plugins.cgi'
 
       CARD_MAPPING = {
         'master'            => 'MC',
@@ -46,14 +47,22 @@ module ActiveMerchant
       def initialize(options = {})
         requires!(options, :login, :password)
         options[:refund_hash] = Digest::SHA1.hexdigest(options[:rebate_secret]) if options.has_key?(:rebate_secret)
+        @otions = options
         super
       end
 
-      def purchase(money, credit_card, options = {})
+      def purchase(money, credit_card_or_payer_ref, options = {})
         requires!(options, :order_id)
 
-        request = build_purchase_or_authorization_request(:purchase, money, credit_card, options)
-        commit(request)
+        # Detect whether we have been provided with a full set of card details (a hash) or simply a
+        # reference to a set of card details already stored with RealEx (an int or string)
+        if credit_card_or_payer_ref.is_a?(String) || credit_card_or_payer_ref.is_a?(Integer)
+          request = build_receipt_in_request(credit_card_or_payer_ref, money, options)
+          commit(request, PLUGINS_URL)
+        else
+          request = build_purchase_or_authorization_request(:purchase, money, credit_card_or_payer_ref, options)
+          commit(request)
+        end
       end
 
       def authorize(money, creditcard, options = {})
@@ -68,9 +77,17 @@ module ActiveMerchant
         commit(request)
       end
 
-      def refund(money, authorization, options = {})
-        request = build_refund_request(money, authorization, options)
-        commit(request)
+      def refund(money, authorization_or_payer_ref, options = {})
+        # Detect whether we have been provided with a set of authorizatiokn details (a hash) or simply a
+        # reference to a set of card details already stored with RealEx (an int or string)
+        if authorization_or_payer_ref.is_a?(String) || authorization_or_payer_ref.is_a?(Integer)
+          requires!(options, :order_id)
+          request = build_payment_out_request(authorization_or_payer_ref, money, options)
+          commit(request, PLUGINS_URL)
+        else
+          request = build_refund_request(money, authorization_or_payer_ref, options)
+          commit(request)
+        end
       end
 
       def credit(money, authorization, options = {})
@@ -82,6 +99,29 @@ module ActiveMerchant
         request = build_void_request(authorization, options)
         commit(request)
       end
+      
+
+      def store(credit_card, options ={})
+        # First attempt to add the payer.
+        request = build_add_payer_request(credit_card, options)
+        response = commit(request, PLUGINS_URL)
+        
+        # If that's successful, add the payment method
+        if response.success?
+          request = build_add_payment_method_request(credit_card, options)
+          response = commit(request, PLUGINS_URL)
+        end
+        response
+      end
+
+      def unstore(ref, options = {})
+        # Note: At the time of writing RealVault bizarrely does not support deleting payers, only
+        # deleting cards. This is odd given the Data Protection Act implications. 
+        # So for now we just delete the card. In the future, if RealEx implement it, this method
+        # should be updated to delete the payer record as well. 
+        request = build_delete_payment_method_request(ref)
+        commit request, PLUGINS_URL
+      end      
 
       def supports_scrubbing
         true
@@ -94,8 +134,14 @@ module ActiveMerchant
       end
 
       private
-      def commit(request)
-        response = parse(ssl_post(self.live_url, request))
+      def logger
+        @options[:logger]
+      end      
+      
+      def commit(request, alt_url=nil)
+        url = alt_url.nil? ? self.live_url : alt_url
+        response = parse(ssl_post(url, request))
+        logger.debug response if logger
 
         Response.new(
           (response[:result] == "00"),
@@ -148,6 +194,75 @@ module ActiveMerchant
         end
         xml.target!
       end
+      
+      def build_add_payment_method_request(credit_card, options)
+        timestamp = new_timestamp
+        xml = Builder::XmlMarkup.new :indent => 2
+        xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'card-new' do
+          xml.tag! 'merchantid', @options[:login]
+          xml.tag! 'orderid', sanitize_order_id(options[:order_id]) if options.include?(:order_id)
+          xml.tag! 'card' do
+            xml.tag! 'ref', 1 # only support a single card per payer. Payers with multiple cards will be setup as multiple payers
+            xml.tag! 'payerref', options[:customer]
+            xml.tag! 'number', credit_card.number
+            xml.tag! 'expdate', expiry_date(credit_card)
+            xml.tag! 'chname', credit_card.name
+            xml.tag! 'type', CARD_MAPPING[card_brand(credit_card).to_s]
+            xml.tag! 'issueno', credit_card.issue_number
+          end
+
+          add_signed_digest(xml, timestamp, @options[:login], sanitize_order_id(options[:order_id]), 
+            nil, nil, options[:customer], credit_card.name, credit_card.number)
+        end
+        xml.target!
+      end
+      
+      def build_delete_payment_method_request(payer_ref) 
+        timestamp = new_timestamp
+        xml = Builder::XmlMarkup.new :indent => 2
+        xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'card-cancel-card' do
+          xml.tag! 'merchantid', @options[:login]
+          xml.tag! 'card' do
+            xml.tag! 'ref', 1
+            xml.tag! 'payerref', payer_ref
+          end
+
+          add_signed_digest(xml, timestamp, @options[:login], payer_ref, 1)
+        end
+      end      
+      
+      def build_receipt_in_request(payer_ref, money, options={})
+        timestamp = new_timestamp
+        xml = Builder::XmlMarkup.new :indent => 2
+        xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'receipt-in' do
+          add_merchant_details(xml, options)
+          add_amount(xml, money, options)
+          xml.tag! 'orderid', sanitize_order_id(options[:order_id]) if options.include?(:order_id)
+          xml.tag! 'payerref', payer_ref
+          xml.tag! 'paymentmethod', 1
+          xml.tag! 'autosettle', 'flag' => 1
+          add_signed_digest(xml, timestamp, @options[:login], sanitize_order_id(options[:order_id]), money, options[:currency] || currency(money), payer_ref)
+        end
+      end
+      
+      
+      def build_payment_out_request(payer_ref, money, options={})
+        timestamp = new_timestamp
+        xml = Builder::XmlMarkup.new :indent => 2
+        xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'payment-out' do
+          add_merchant_details(xml, options)
+          add_amount(xml, money, options)
+          xml.tag! 'orderid', sanitize_order_id(options[:order_id]) if options.include?(:order_id)
+          xml.tag! 'payerref', payer_ref
+          xml.tag! 'paymentmethod', 1
+          xml.tag! 'refundhash', @options[:refund_hash]
+          add_signed_digest(xml, timestamp, @options[:login], sanitize_order_id(options[:order_id]), money, options[:currency] || currency(money), payer_ref)
+        end
+      end
+      
+
+
+
 
       def build_capture_request(authorization, options)
         timestamp = new_timestamp
@@ -253,6 +368,10 @@ module ActiveMerchant
           end
         end
       end
+      
+      def payer_ref(credit_card)
+        "#{credit_card.first_name}_#{credit_card.last_name}"
+      end      
 
       def format_address_code(address)
         code = [address[:zip].to_s, address[:address1].to_s + address[:address2].to_s]
