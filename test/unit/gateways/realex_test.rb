@@ -3,7 +3,9 @@ require 'test_helper'
 class RealexTest < Test::Unit::TestCase
   class ActiveMerchant::Billing::RealexGateway
     # For the purposes of testing, lets redefine some protected methods as public.
-    public :build_purchase_or_authorization_request, :build_refund_request, :build_void_request, :build_capture_request
+    public :build_purchase_or_authorization_request, :build_refund_request, :build_void_request, :build_capture_request, 
+            :build_add_payer_request, :build_add_payment_method_request, :build_delete_payment_method_request, :build_receipt_in_request,
+           :build_payment_out_request
   end
 
   def setup
@@ -76,6 +78,16 @@ class RealexTest < Test::Unit::TestCase
     assert_failure response
     assert response.test?
   end
+  
+  def test_successful_purchase_with_stored_card
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'receipt-in' == XmlSimple.xml_in(data)['type'] 
+      }.returns(successful_plugin_response)
+
+    response = @gateway.purchase(@amount, 333, @options)
+    assert_instance_of Response, response
+    assert_success response
+  end  
 
   def test_successful_refund
     @gateway.expects(:ssl_post).returns(successful_refund_response)
@@ -86,12 +98,66 @@ class RealexTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).returns(unsuccessful_refund_response)
     assert_failure @gateway.refund(@amount, '1234;1234;1234')
   end
+  
+  def test_successful_refund_with_stored_card
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'payment-out' == XmlSimple.xml_in(data)['type'] 
+      }.returns(successful_plugin_response)
+
+    response = @gateway.refund(@amount, 333, @options)
+    assert_instance_of Response, response
+    assert_success response
+  end  
 
   def test_deprecated_credit
     @gateway.expects(:ssl_post).returns(successful_refund_response)
     assert_deprecation_warning(Gateway::CREDIT_DEPRECATION_MESSAGE) do
       assert_success @gateway.credit(@amount, '1234;1234;1234')
     end
+  end
+  
+  def test_store
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'payer-new' == XmlSimple.xml_in(data)['type'] &&
+      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
+      }.returns(successful_plugin_response)
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'card-new' == XmlSimple.xml_in(data)['type'] &&
+      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
+      }.returns(successful_plugin_response)
+    response = @gateway.store(@credit_card, {:customer => 1})
+    assert_instance_of Response, response
+    assert_success response
+  end
+  
+  def test_unsuccessful_store
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'payer-new' == XmlSimple.xml_in(data)['type'] &&
+      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
+      }.returns(unsuccessful_plugin_response)
+    response = @gateway.store(@credit_card, {:customer => 1})
+    assert_instance_of Response, response
+    assert_failure response
+  end
+
+  def test_unstore
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
+      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
+      }.returns(successful_plugin_response)
+    response = @gateway.unstore(1)
+    assert_instance_of Response, response
+    assert_success response
+  end
+
+  def test_unsuccessful_unstore
+    @gateway.expects(:ssl_post).with(){|endpoint, data|
+      'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
+      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
+      }.returns(unsuccessful_plugin_response)
+    response = @gateway.unstore(1)
+    assert_instance_of Response, response
+    assert_failure response
   end
 
   def test_supported_countries
@@ -266,6 +332,176 @@ SRC
     assert_xml_equal valid_refund_request_xml, gateway.build_refund_request(@amount, '1;4321;1234', {})
 
   end
+  
+ def test_add_payer_xml
+    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+
+    # First test the method when the optional order ID is included.
+    options = {
+      :order_id => '1',
+      :customer => 'Longbob_Longsen'
+    }
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_add_payer_xml = <<-SRC
+<request timestamp="20090824160201" type="payer-new">
+  <merchantid>your_merchant_id</merchantid>
+  <orderid>1</orderid>
+  <payer type="Business" ref="Longbob_Longsen">
+    <firstname>Longbob</firstname>
+    <surname>Longsen</surname>
+  </payer>
+  <sha1hash>940846325851cfb37bfc1bf36318980609837d2c</sha1hash>
+</request>
+SRC
+    
+    assert_xml_equal valid_add_payer_xml, gateway.build_add_payer_request(@credit_card, options)
+
+    # Test the method with the order ID omitted
+    options = {
+      :customer => 'Longbob_Longsen'
+    }
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_add_payer_xml = <<-SRC
+<request timestamp="20090824160201" type="payer-new">
+  <merchantid>your_merchant_id</merchantid>
+  <payer type="Business" ref="Longbob_Longsen">
+    <firstname>Longbob</firstname>
+    <surname>Longsen</surname>
+  </payer>
+  <sha1hash>56b1d48eacf4d7bf135a3866b52491f47a5fadcb</sha1hash>
+</request>
+SRC
+    
+    assert_xml_equal valid_add_payer_xml, gateway.build_add_payer_request(@credit_card, options)
+  end  
+  
+  def test_add_payment_method_xml
+    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+
+    options = {
+      :order_id => '1',
+      :customer => 'Longbob_Longsen'
+    }
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_add_payment_method_xml = <<-SRC
+<request timestamp="20090824160201" type="card-new">
+  <merchantid>your_merchant_id</merchantid>
+  <orderid>1</orderid>
+  <card>
+    <ref>1</ref>
+    <payerref>Longbob_Longsen</payerref>
+    <number>4263971921001307</number>
+    <expdate>0808</expdate>
+    <chname>Longbob Longsen</chname>
+    <type>VISA</type>
+    <issueno />
+  </card>
+  <sha1hash>946379fe5d9b4ddd90a974041d216bdc2e4dcae7</sha1hash>
+</request>
+SRC
+    
+    assert_xml_equal valid_add_payment_method_xml, gateway.build_add_payment_method_request(@credit_card, options)
+
+    options = {
+      :customer => 'Longbob_Longsen'
+    }
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_add_payment_method_xml = <<-SRC
+<request timestamp="20090824160201" type="card-new">
+  <merchantid>your_merchant_id</merchantid>
+  <card>
+    <ref>1</ref>
+    <payerref>Longbob_Longsen</payerref>
+    <number>4263971921001307</number>
+    <expdate>0808</expdate>
+    <chname>Longbob Longsen</chname>
+    <type>VISA</type>
+    <issueno />
+  </card>
+  <sha1hash>606d5e89158c96bb4e80fc81af02228f3aba3823</sha1hash>
+</request>
+SRC
+    
+    assert_xml_equal valid_add_payment_method_xml, gateway.build_add_payment_method_request(@credit_card, options)
+  end
+
+  def test_delete_payment_method_xml
+    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_delete_payment_method_xml = <<-SRC
+<request timestamp="20090824160201" type="card-cancel-card">
+  <merchantid>your_merchant_id</merchantid>
+  <card>
+    <ref>1</ref>
+    <payerref>Longbob_Longsen</payerref>
+  </card>
+  <sha1hash>2c9cbca68b3694ed5ebe6fa44d289b3599aa2112</sha1hash>
+</request>
+SRC
+    
+    assert_xml_equal valid_delete_payment_method_xml, gateway.build_delete_payment_method_request('Longbob_Longsen')    
+  end
+
+
+  def test_receipt_in_xml
+    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_receipt_in_xml = <<-SRC
+<request type="receipt-in" timestamp="20090824160201"> 
+  <merchantid>your_merchant_id</merchantid> 
+  <account>your_account</account> 
+  <amount currency="AUD">9999</amount> 
+  <orderid>trans01</orderid>
+  <payerref>33</payerref> 
+  <paymentmethod>1</paymentmethod> 
+  <autosettle flag="1" /> 
+  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash> 
+</request>
+SRC
+    
+    assert_xml_equal(
+      valid_receipt_in_xml, 
+      gateway.build_receipt_in_request(
+        33, 9999, :currency => 'AUD', :order_id => "trans01"))
+  end
+
+  # Test we can build the payment-out XML fragment used to pay out a refund from a stored card. 
+  def test_payment_out_xml
+    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+
+    gateway.expects(:new_timestamp).returns('20090824160201')
+
+    valid_payment_out_xml = <<-SRC
+<request type="payment-out" timestamp="20090824160201"> 
+  <merchantid>your_merchant_id</merchantid> 
+  <account>your_account</account> 
+  <amount currency="AUD">9999</amount> 
+  <orderid>trans01</orderid>
+  <payerref>33</payerref> 
+  <paymentmethod>1</paymentmethod> 
+  <refundhash>f94ff2a7c125a8ad87e5683114ba1e384889240e</refundhash> 
+  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash> 
+</request>
+SRC
+    
+    assert_xml_equal(
+      valid_payment_out_xml, 
+      gateway.build_payment_out_request(
+        33, 9999, :currency => 'AUD', :order_id => "trans01"))
+  end
+  
 
   def test_auth_with_address
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
