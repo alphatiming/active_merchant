@@ -45,7 +45,6 @@ module ActiveMerchant
         requires!(options, :login, :password)
         options[:refund_hash] = Digest::SHA1.hexdigest(options[:rebate_secret]) if options[:rebate_secret].present?
         options[:credit_hash] = Digest::SHA1.hexdigest(options[:refund_secret]) if options[:refund_secret].present?
-        @otions = options
         super
       end
 
@@ -76,7 +75,7 @@ module ActiveMerchant
       end
 
       def refund(money, authorization_or_payer_ref, options = {})
-        # Detect whether we have been provided with a set of authorizatiokn details (a hash) or simply a
+        # Detect whether we have been provided with a set of authorization details (a hash) or simply a
         # reference to a set of card details already stored with RealEx (an int or string)
         if authorization_or_payer_ref.is_a?(String) || authorization_or_payer_ref.is_a?(Integer)
           requires!(options, :order_id)
@@ -231,7 +230,6 @@ module ActiveMerchant
             xml.tag! 'expdate', expiry_date(credit_card)
             xml.tag! 'chname', credit_card.name
             xml.tag! 'type', CARD_MAPPING[card_brand(credit_card).to_s]
-            xml.tag! 'issueno', credit_card.issue_number
           end
 
           add_signed_digest(xml, timestamp, @options[:login], sanitize_order_id(options[:order_id]),

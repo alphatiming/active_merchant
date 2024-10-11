@@ -1,4 +1,5 @@
 require 'test_helper'
+require 'xmlsimple'
 
 class RealexTest < Test::Unit::TestCase
   include CommStub
@@ -123,7 +124,7 @@ class RealexTest < Test::Unit::TestCase
   def test_successful_purchase_with_stored_card
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'receipt-in' == XmlSimple.xml_in(data)['type']
-      }.returns(successful_plugin_response)
+      }.returns(successful_purchase_response)
 
     response = @gateway.purchase(@amount, 333, @options)
     assert_instance_of Response, response
@@ -154,18 +155,18 @@ class RealexTest < Test::Unit::TestCase
 
   def test_successful_refund
     @gateway.expects(:ssl_post).returns(successful_refund_response)
-    assert_success @gateway.refund(@amount, '1234;1234;1234')
+    assert_success @gateway.refund(@amount, '1234;1234;1234', @options)
   end
 
   def test_unsuccessful_refund
     @gateway.expects(:ssl_post).returns(unsuccessful_refund_response)
-    assert_failure @gateway.refund(@amount, '1234;1234;1234')
+    assert_failure @gateway.refund(@amount, '1234;1234;1234', @options)
   end
 
   def test_successful_refund_with_stored_card
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'payment-out' == XmlSimple.xml_in(data)['type']
-      }.returns(successful_plugin_response)
+      }.returns(successful_refund_response)
 
     response = @gateway.refund(@amount, 333, @options)
     assert_instance_of Response, response
@@ -186,11 +187,11 @@ class RealexTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'payer-new' == XmlSimple.xml_in(data)['type'] &&
       "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_plugin_response)
+      }.returns(successful_payer_response)
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'card-new' == XmlSimple.xml_in(data)['type'] &&
       "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_plugin_response)
+      }.returns(successful_store_response)
     response = @gateway.store(@credit_card, {:customer => 1})
     assert_instance_of Response, response
     assert_success response
@@ -200,7 +201,7 @@ class RealexTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'payer-new' == XmlSimple.xml_in(data)['type'] &&
       "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(unsuccessful_plugin_response)
+      }.returns(unsuccessful_payer_response)
     response = @gateway.store(@credit_card, {:customer => 1})
     assert_instance_of Response, response
     assert_failure response
@@ -210,7 +211,7 @@ class RealexTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
       "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_plugin_response)
+      }.returns(successful_unstore_response)
     response = @gateway.unstore(1)
     assert_instance_of Response, response
     assert_success response
@@ -220,7 +221,7 @@ class RealexTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).with(){|endpoint, data|
       'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
       "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(unsuccessful_plugin_response)
+      }.returns(unsuccessful_unstore_response)
     response = @gateway.unstore(1)
     assert_instance_of Response, response
     assert_failure response
@@ -538,7 +539,7 @@ class RealexTest < Test::Unit::TestCase
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_add_payer_xml = <<-SRC
+    valid_add_payer_xml = <<~SRC
 <request timestamp="20090824160201" type="payer-new">
   <merchantid>your_merchant_id</merchantid>
   <orderid>1</orderid>
@@ -559,7 +560,7 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_add_payer_xml = <<-SRC
+    valid_add_payer_xml = <<~SRC
 <request timestamp="20090824160201" type="payer-new">
   <merchantid>your_merchant_id</merchantid>
   <payer type="Business" ref="Longbob_Longsen">
@@ -583,7 +584,7 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_add_payment_method_xml = <<-SRC
+    valid_add_payment_method_xml = <<~SRC
 <request timestamp="20090824160201" type="card-new">
   <merchantid>your_merchant_id</merchantid>
   <orderid>1</orderid>
@@ -594,7 +595,6 @@ SRC
     <expdate>0808</expdate>
     <chname>Longbob Longsen</chname>
     <type>VISA</type>
-    <issueno />
   </card>
   <sha1hash>946379fe5d9b4ddd90a974041d216bdc2e4dcae7</sha1hash>
 </request>
@@ -608,7 +608,7 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_add_payment_method_xml = <<-SRC
+    valid_add_payment_method_xml = <<~SRC
 <request timestamp="20090824160201" type="card-new">
   <merchantid>your_merchant_id</merchantid>
   <card>
@@ -618,7 +618,6 @@ SRC
     <expdate>0808</expdate>
     <chname>Longbob Longsen</chname>
     <type>VISA</type>
-    <issueno />
   </card>
   <sha1hash>606d5e89158c96bb4e80fc81af02228f3aba3823</sha1hash>
 </request>
@@ -632,7 +631,7 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_delete_payment_method_xml = <<-SRC
+    valid_delete_payment_method_xml = <<~SRC
 <request timestamp="20090824160201" type="card-cancel-card">
   <merchantid>your_merchant_id</merchantid>
   <card>
@@ -652,16 +651,16 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_receipt_in_xml = <<-SRC
-<request type="receipt-in" timestamp="20090824160201"> 
-  <merchantid>your_merchant_id</merchantid> 
-  <account>your_account</account> 
-  <amount currency="AUD">9999</amount> 
+    valid_receipt_in_xml = <<~SRC
+<request timestamp="20090824160201" type="receipt-in">
+  <merchantid>your_merchant_id</merchantid>
+  <account>your_account</account>
+  <amount currency="AUD">9999</amount>
   <orderid>trans01</orderid>
-  <payerref>33</payerref> 
-  <paymentmethod>1</paymentmethod> 
-  <autosettle flag="1" /> 
-  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash> 
+  <payerref>33</payerref>
+  <paymentmethod>1</paymentmethod>
+  <autosettle flag="1" />
+  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
 </request>
 SRC
 
@@ -677,16 +676,16 @@ SRC
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
-    valid_payment_out_xml = <<-SRC
-<request type="payment-out" timestamp="20090824160201"> 
-  <merchantid>your_merchant_id</merchantid> 
-  <account>your_account</account> 
-  <amount currency="AUD">9999</amount> 
+    valid_payment_out_xml = <<~SRC
+<request timestamp="20090824160201" type="payment-out">
+  <merchantid>your_merchant_id</merchantid>
+  <account>your_account</account>
+  <amount currency="AUD">9999</amount>
   <orderid>trans01</orderid>
-  <payerref>33</payerref> 
-  <paymentmethod>1</paymentmethod> 
-  <refundhash>f94ff2a7c125a8ad87e5683114ba1e384889240e</refundhash> 
-  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash> 
+  <payerref>33</payerref>
+  <paymentmethod>1</paymentmethod>
+  <refundhash>f94ff2a7c125a8ad87e5683114ba1e384889240e</refundhash>
+  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
 </request>
 SRC
 
@@ -971,7 +970,7 @@ SRC
   end
 
   def successful_credit_response
-    <<-RESPONSE
+    <<~RESPONSE
     <response timestamp="20190717205030">
     <merchantid>spreedly</merchantid>
     <account>internet</account>
@@ -993,17 +992,95 @@ SRC
       <region>EUR</region>
     </cardissuer>
     <sha1hash>6d2fc...67814</sha1hash>
-  </response>"
+  </response>
     RESPONSE
   end
 
   def unsuccessful_credit_response
-    <<-RESPONSE
+    <<~RESPONSE
     <response timestamp="20190717210119">
     <result>502</result>
     <message>Refund Hash not present.</message>
     <orderid>_refund_fd4ea2d10b339011bdba89f580c5b207</orderid>
-  </response>"
+  </response>
+    RESPONSE
+  end
+
+  def successful_payer_response
+    <<~RESPONSE
+    <response timestamp="20180731090859">
+    <merchantid>MerchantId</merchantid>
+    <account>internet</account>
+    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+    <result>00</result>
+    <message>Successful</message>
+    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+    <authcode/>
+    <batchid/>
+    <timetaken>1</timetaken>
+    <processingtimetaken/>
+    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+  </response>
+    RESPONSE
+  end
+
+  def unsuccessful_payer_response
+    <<~RESPONSE
+    <response timestamp="20190717210119">
+    <merchantid>MerchantId</merchantid>
+    <account>internet</account>
+    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+    <result>502</result>
+    <message>Unsuccessful</message>
+  </response>
+    RESPONSE
+  end
+
+  def successful_store_response
+    <<~RESPONSE
+    <response timestamp="20180731090859">
+    <merchantid>MerchantId</merchantid>
+    <account>internet</account>
+    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+    <result>00</result>
+    <message>Successful</message>
+    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+    <authcode/>
+    <batchid/>
+    <timetaken>1</timetaken>
+    <processingtimetaken/>
+    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+  </response>
+    RESPONSE
+  end
+
+  def successful_unstore_response
+    <<~RESPONSE
+    <response timestamp="20180731090859">
+    <merchantid>MerchantId</merchantid>
+    <account>internet</account>
+    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+    <result>00</result>
+    <message>Successful</message>
+    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+    <authcode/>
+    <batchid/>
+    <timetaken>1</timetaken>
+    <processingtimetaken/>
+    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+  </response>
+    RESPONSE
+  end
+
+  def unsuccessful_unstore_response
+    <<~RESPONSE
+    <response timestamp="20180731090859">
+    <merchantid>MerchantId</merchantid>
+    <account>internet</account>
+    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+    <result>502</result>
+    <message>Unsuccessful</message>
+  </response>
     RESPONSE
   end
 
