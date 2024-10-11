@@ -104,7 +104,7 @@ module ActiveMerchant
         commit(request)
       end
 
-      def store(credit_card, options ={})
+      def store(credit_card, options = {})
         # First attempt to add the payer.
         request = build_add_payer_request(credit_card, options)
         response = commit(request, PLUGINS_URL)
@@ -137,14 +137,15 @@ module ActiveMerchant
       end
 
       private
+
       def logger
         @options[:logger]
       end
 
-      def commit(request, alt_url=nil)
+      def commit(request, alt_url = nil)
         url = alt_url.nil? ? self.live_url : alt_url
         response = parse(ssl_post(url, request))
-        logger.debug response if logger
+        logger&.debug response
 
         Response.new(
           (response[:result] == '00'),
@@ -203,7 +204,7 @@ module ActiveMerchant
 
       def build_add_payer_request(credit_card, options)
         timestamp = new_timestamp
-        xml = Builder::XmlMarkup.new :indent => 2
+        xml = Builder::XmlMarkup.new indent: 2
         xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'payer-new' do
           xml.tag! 'merchantid', @options[:login]
           xml.tag! 'orderid', sanitize_order_id(options[:order_id]) if options.include?(:order_id)
@@ -219,7 +220,7 @@ module ActiveMerchant
 
       def build_add_payment_method_request(credit_card, options)
         timestamp = new_timestamp
-        xml = Builder::XmlMarkup.new :indent => 2
+        xml = Builder::XmlMarkup.new indent: 2
         xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'card-new' do
           xml.tag! 'merchantid', @options[:login]
           xml.tag! 'orderid', sanitize_order_id(options[:order_id]) if options.include?(:order_id)
@@ -240,7 +241,7 @@ module ActiveMerchant
 
       def build_delete_payment_method_request(payer_ref)
         timestamp = new_timestamp
-        xml = Builder::XmlMarkup.new :indent => 2
+        xml = Builder::XmlMarkup.new indent: 2
         xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'card-cancel-card' do
           xml.tag! 'merchantid', @options[:login]
           xml.tag! 'card' do
@@ -252,9 +253,9 @@ module ActiveMerchant
         end
       end
 
-      def build_receipt_in_request(payer_ref, money, options={})
+      def build_receipt_in_request(payer_ref, money, options = {})
         timestamp = new_timestamp
-        xml = Builder::XmlMarkup.new :indent => 2
+        xml = Builder::XmlMarkup.new indent: 2
         xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'receipt-in' do
           add_merchant_details(xml, options)
           add_amount(xml, money, options)
@@ -266,10 +267,9 @@ module ActiveMerchant
         end
       end
 
-
-      def build_payment_out_request(payer_ref, money, options={})
+      def build_payment_out_request(payer_ref, money, options = {})
         timestamp = new_timestamp
-        xml = Builder::XmlMarkup.new :indent => 2
+        xml = Builder::XmlMarkup.new indent: 2
         xml.tag! 'request', 'timestamp' => timestamp, 'type' => 'payment-out' do
           add_merchant_details(xml, options)
           add_amount(xml, money, options)
@@ -280,10 +280,6 @@ module ActiveMerchant
           add_signed_digest(xml, timestamp, @options[:login], sanitize_order_id(options[:order_id]), money, options[:currency] || currency(money), payer_ref)
         end
       end
-
-
-
-
 
       def build_capture_request(money, authorization, options)
         timestamp = new_timestamp

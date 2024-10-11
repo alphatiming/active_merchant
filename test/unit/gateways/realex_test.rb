@@ -122,9 +122,9 @@ class RealexTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_stored_card
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
-      'receipt-in' == XmlSimple.xml_in(data)['type']
-      }.returns(successful_purchase_response)
+    @gateway.expects(:ssl_post).with() { |_endpoint, data|
+      XmlSimple.xml_in(data)['type'] == 'receipt-in'
+    }.returns(successful_purchase_response)
 
     response = @gateway.purchase(@amount, 333, @options)
     assert_instance_of Response, response
@@ -164,9 +164,9 @@ class RealexTest < Test::Unit::TestCase
   end
 
   def test_successful_refund_with_stored_card
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
-      'payment-out' == XmlSimple.xml_in(data)['type']
-      }.returns(successful_refund_response)
+    @gateway.expects(:ssl_post).with() { |_endpoint, data|
+      XmlSimple.xml_in(data)['type'] == 'payment-out'
+    }.returns(successful_refund_response)
 
     response = @gateway.refund(@amount, 333, @options)
     assert_instance_of Response, response
@@ -184,44 +184,44 @@ class RealexTest < Test::Unit::TestCase
   end
 
   def test_store
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
-      'payer-new' == XmlSimple.xml_in(data)['type'] &&
-      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_payer_response)
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
-      'card-new' == XmlSimple.xml_in(data)['type'] &&
-      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_store_response)
-    response = @gateway.store(@credit_card, {:customer => 1})
+    @gateway.expects(:ssl_post).with() { |endpoint, data|
+      XmlSimple.xml_in(data)['type'] == 'payer-new' &&
+        endpoint == 'https://epage.payandshop.com/epage-remote-plugins.cgi'
+    }.returns(successful_payer_response)
+    @gateway.expects(:ssl_post).with() { |endpoint, data|
+      XmlSimple.xml_in(data)['type'] == 'card-new' &&
+        endpoint == 'https://epage.payandshop.com/epage-remote-plugins.cgi'
+    }.returns(successful_store_response)
+    response = @gateway.store(@credit_card, { customer: 1 })
     assert_instance_of Response, response
     assert_success response
   end
 
   def test_unsuccessful_store
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
-      'payer-new' == XmlSimple.xml_in(data)['type'] &&
-      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(unsuccessful_payer_response)
-    response = @gateway.store(@credit_card, {:customer => 1})
+    @gateway.expects(:ssl_post).with() { |endpoint, data|
+      XmlSimple.xml_in(data)['type'] == 'payer-new' &&
+        endpoint == 'https://epage.payandshop.com/epage-remote-plugins.cgi'
+    }.returns(unsuccessful_payer_response)
+    response = @gateway.store(@credit_card, { customer: 1 })
     assert_instance_of Response, response
     assert_failure response
   end
 
   def test_unstore
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
+    @gateway.expects(:ssl_post).with() { |endpoint, data|
       'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
-      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(successful_unstore_response)
+        endpoint == 'https://epage.payandshop.com/epage-remote-plugins.cgi'
+    }.returns(successful_unstore_response)
     response = @gateway.unstore(1)
     assert_instance_of Response, response
     assert_success response
   end
 
   def test_unsuccessful_unstore
-    @gateway.expects(:ssl_post).with(){|endpoint, data|
+    @gateway.expects(:ssl_post).with() { |endpoint, data|
       'card-cancel-card'.eql?(XmlSimple.xml_in(data)['type']) &&
-      "https://epage.payandshop.com/epage-remote-plugins.cgi" == endpoint
-      }.returns(unsuccessful_unstore_response)
+        endpoint == 'https://epage.payandshop.com/epage-remote-plugins.cgi'
+    }.returns(unsuccessful_unstore_response)
     response = @gateway.unstore(1)
     assert_instance_of Response, response
     assert_failure response
@@ -528,173 +528,175 @@ class RealexTest < Test::Unit::TestCase
     assert_xml_equal valid_credit_request_xml, gateway.build_credit_request(@amount, @credit_card, @options)
   end
 
- def test_add_payer_xml
-    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+  def test_add_payer_xml
+    gateway = RealexGateway.new(login: @login, password: @password, account: @account, rebate_secret: @rebate_secret)
 
     # First test the method when the optional order ID is included.
     options = {
-      :order_id => '1',
-      :customer => 'Longbob_Longsen'
+      order_id: '1',
+      customer: 'Longbob_Longsen'
     }
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_add_payer_xml = <<~SRC
-<request timestamp="20090824160201" type="payer-new">
-  <merchantid>your_merchant_id</merchantid>
-  <orderid>1</orderid>
-  <payer type="Business" ref="Longbob_Longsen">
-    <firstname>Longbob</firstname>
-    <surname>Longsen</surname>
-  </payer>
-  <sha1hash>940846325851cfb37bfc1bf36318980609837d2c</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="payer-new">
+        <merchantid>your_merchant_id</merchantid>
+        <orderid>1</orderid>
+        <payer type="Business" ref="Longbob_Longsen">
+          <firstname>Longbob</firstname>
+          <surname>Longsen</surname>
+        </payer>
+        <sha1hash>940846325851cfb37bfc1bf36318980609837d2c</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal valid_add_payer_xml, gateway.build_add_payer_request(@credit_card, options)
 
     # Test the method with the order ID omitted
     options = {
-      :customer => 'Longbob_Longsen'
+      customer: 'Longbob_Longsen'
     }
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_add_payer_xml = <<~SRC
-<request timestamp="20090824160201" type="payer-new">
-  <merchantid>your_merchant_id</merchantid>
-  <payer type="Business" ref="Longbob_Longsen">
-    <firstname>Longbob</firstname>
-    <surname>Longsen</surname>
-  </payer>
-  <sha1hash>56b1d48eacf4d7bf135a3866b52491f47a5fadcb</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="payer-new">
+        <merchantid>your_merchant_id</merchantid>
+        <payer type="Business" ref="Longbob_Longsen">
+          <firstname>Longbob</firstname>
+          <surname>Longsen</surname>
+        </payer>
+        <sha1hash>56b1d48eacf4d7bf135a3866b52491f47a5fadcb</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal valid_add_payer_xml, gateway.build_add_payer_request(@credit_card, options)
   end
 
   def test_add_payment_method_xml
-    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+    gateway = RealexGateway.new(login: @login, password: @password, account: @account, rebate_secret: @rebate_secret)
 
     options = {
-      :order_id => '1',
-      :customer => 'Longbob_Longsen'
+      order_id: '1',
+      customer: 'Longbob_Longsen'
     }
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_add_payment_method_xml = <<~SRC
-<request timestamp="20090824160201" type="card-new">
-  <merchantid>your_merchant_id</merchantid>
-  <orderid>1</orderid>
-  <card>
-    <ref>1</ref>
-    <payerref>Longbob_Longsen</payerref>
-    <number>4263971921001307</number>
-    <expdate>0808</expdate>
-    <chname>Longbob Longsen</chname>
-    <type>VISA</type>
-  </card>
-  <sha1hash>946379fe5d9b4ddd90a974041d216bdc2e4dcae7</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="card-new">
+        <merchantid>your_merchant_id</merchantid>
+        <orderid>1</orderid>
+        <card>
+          <ref>1</ref>
+          <payerref>Longbob_Longsen</payerref>
+          <number>4263971921001307</number>
+          <expdate>0808</expdate>
+          <chname>Longbob Longsen</chname>
+          <type>VISA</type>
+        </card>
+        <sha1hash>946379fe5d9b4ddd90a974041d216bdc2e4dcae7</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal valid_add_payment_method_xml, gateway.build_add_payment_method_request(@credit_card, options)
 
     options = {
-      :customer => 'Longbob_Longsen'
+      customer: 'Longbob_Longsen'
     }
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_add_payment_method_xml = <<~SRC
-<request timestamp="20090824160201" type="card-new">
-  <merchantid>your_merchant_id</merchantid>
-  <card>
-    <ref>1</ref>
-    <payerref>Longbob_Longsen</payerref>
-    <number>4263971921001307</number>
-    <expdate>0808</expdate>
-    <chname>Longbob Longsen</chname>
-    <type>VISA</type>
-  </card>
-  <sha1hash>606d5e89158c96bb4e80fc81af02228f3aba3823</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="card-new">
+        <merchantid>your_merchant_id</merchantid>
+        <card>
+          <ref>1</ref>
+          <payerref>Longbob_Longsen</payerref>
+          <number>4263971921001307</number>
+          <expdate>0808</expdate>
+          <chname>Longbob Longsen</chname>
+          <type>VISA</type>
+        </card>
+        <sha1hash>606d5e89158c96bb4e80fc81af02228f3aba3823</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal valid_add_payment_method_xml, gateway.build_add_payment_method_request(@credit_card, options)
   end
 
   def test_delete_payment_method_xml
-    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+    gateway = RealexGateway.new(login: @login, password: @password, account: @account, rebate_secret: @rebate_secret)
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_delete_payment_method_xml = <<~SRC
-<request timestamp="20090824160201" type="card-cancel-card">
-  <merchantid>your_merchant_id</merchantid>
-  <card>
-    <ref>1</ref>
-    <payerref>Longbob_Longsen</payerref>
-  </card>
-  <sha1hash>2c9cbca68b3694ed5ebe6fa44d289b3599aa2112</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="card-cancel-card">
+        <merchantid>your_merchant_id</merchantid>
+        <card>
+          <ref>1</ref>
+          <payerref>Longbob_Longsen</payerref>
+        </card>
+        <sha1hash>2c9cbca68b3694ed5ebe6fa44d289b3599aa2112</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal valid_delete_payment_method_xml, gateway.build_delete_payment_method_request('Longbob_Longsen')
   end
 
-
   def test_receipt_in_xml
-    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+    gateway = RealexGateway.new(login: @login, password: @password, account: @account, rebate_secret: @rebate_secret)
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_receipt_in_xml = <<~SRC
-<request timestamp="20090824160201" type="receipt-in">
-  <merchantid>your_merchant_id</merchantid>
-  <account>your_account</account>
-  <amount currency="AUD">9999</amount>
-  <orderid>trans01</orderid>
-  <payerref>33</payerref>
-  <paymentmethod>1</paymentmethod>
-  <autosettle flag="1" />
-  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="receipt-in">
+        <merchantid>your_merchant_id</merchantid>
+        <account>your_account</account>
+        <amount currency="AUD">9999</amount>
+        <orderid>trans01</orderid>
+        <payerref>33</payerref>
+        <paymentmethod>1</paymentmethod>
+        <autosettle flag="1" />
+        <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal(
       valid_receipt_in_xml,
       gateway.build_receipt_in_request(
-        33, 9999, :currency => 'AUD', :order_id => "trans01"))
+        33, 9999, currency: 'AUD', order_id: 'trans01'
+      )
+    )
   end
 
   # Test we can build the payment-out XML fragment used to pay out a refund from a stored card.
   def test_payment_out_xml
-    gateway = RealexGateway.new(:login => @login, :password => @password, :account => @account, :rebate_secret => @rebate_secret)
+    gateway = RealexGateway.new(login: @login, password: @password, account: @account, rebate_secret: @rebate_secret)
 
     gateway.expects(:new_timestamp).returns('20090824160201')
 
     valid_payment_out_xml = <<~SRC
-<request timestamp="20090824160201" type="payment-out">
-  <merchantid>your_merchant_id</merchantid>
-  <account>your_account</account>
-  <amount currency="AUD">9999</amount>
-  <orderid>trans01</orderid>
-  <payerref>33</payerref>
-  <paymentmethod>1</paymentmethod>
-  <refundhash>f94ff2a7c125a8ad87e5683114ba1e384889240e</refundhash>
-  <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
-</request>
-SRC
+      <request timestamp="20090824160201" type="payment-out">
+        <merchantid>your_merchant_id</merchantid>
+        <account>your_account</account>
+        <amount currency="AUD">9999</amount>
+        <orderid>trans01</orderid>
+        <payerref>33</payerref>
+        <paymentmethod>1</paymentmethod>
+        <refundhash>f94ff2a7c125a8ad87e5683114ba1e384889240e</refundhash>
+        <sha1hash>e1b53b2a2947337e06cc2dfd2d5174f1e7a91b3d</sha1hash>
+      </request>
+    SRC
 
     assert_xml_equal(
       valid_payment_out_xml,
       gateway.build_payment_out_request(
-        33, 9999, :currency => 'AUD', :order_id => "trans01"))
+        33, 9999, currency: 'AUD', order_id: 'trans01'
+      )
+    )
   end
-
 
   def test_auth_with_address
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
@@ -971,116 +973,116 @@ SRC
 
   def successful_credit_response
     <<~RESPONSE
-    <response timestamp="20190717205030">
-    <merchantid>spreedly</merchantid>
-    <account>internet</account>
-    <orderid>57a861e97273371e6f1b1737a9bc5710</orderid>
-    <authcode>005030</authcode>
-    <result>00</result>
-    <cvnresult>U</cvnresult>
-    <avspostcoderesponse>U</avspostcoderesponse>
-    <avsaddressresponse>U</avsaddressresponse>
-    <batchid>674655</batchid>
-    <message>AUTH CODE: 005030</message>
-    <pasref>15633930303644971</pasref>
-    <timetaken>0</timetaken>
-    <authtimetaken>0</authtimetaken>
-    <cardissuer>
-      <bank>AIB BANK</bank>
-      <country>IRELAND</country>
-      <countrycode>IE</countrycode>
-      <region>EUR</region>
-    </cardissuer>
-    <sha1hash>6d2fc...67814</sha1hash>
-  </response>
+        <response timestamp="20190717205030">
+        <merchantid>spreedly</merchantid>
+        <account>internet</account>
+        <orderid>57a861e97273371e6f1b1737a9bc5710</orderid>
+        <authcode>005030</authcode>
+        <result>00</result>
+        <cvnresult>U</cvnresult>
+        <avspostcoderesponse>U</avspostcoderesponse>
+        <avsaddressresponse>U</avsaddressresponse>
+        <batchid>674655</batchid>
+        <message>AUTH CODE: 005030</message>
+        <pasref>15633930303644971</pasref>
+        <timetaken>0</timetaken>
+        <authtimetaken>0</authtimetaken>
+        <cardissuer>
+          <bank>AIB BANK</bank>
+          <country>IRELAND</country>
+          <countrycode>IE</countrycode>
+          <region>EUR</region>
+        </cardissuer>
+        <sha1hash>6d2fc...67814</sha1hash>
+      </response>
     RESPONSE
   end
 
   def unsuccessful_credit_response
     <<~RESPONSE
-    <response timestamp="20190717210119">
-    <result>502</result>
-    <message>Refund Hash not present.</message>
-    <orderid>_refund_fd4ea2d10b339011bdba89f580c5b207</orderid>
-  </response>
+        <response timestamp="20190717210119">
+        <result>502</result>
+        <message>Refund Hash not present.</message>
+        <orderid>_refund_fd4ea2d10b339011bdba89f580c5b207</orderid>
+      </response>
     RESPONSE
   end
 
   def successful_payer_response
     <<~RESPONSE
-    <response timestamp="20180731090859">
-    <merchantid>MerchantId</merchantid>
-    <account>internet</account>
-    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
-    <result>00</result>
-    <message>Successful</message>
-    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
-    <authcode/>
-    <batchid/>
-    <timetaken>1</timetaken>
-    <processingtimetaken/>
-    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
-  </response>
+        <response timestamp="20180731090859">
+        <merchantid>MerchantId</merchantid>
+        <account>internet</account>
+        <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+        <result>00</result>
+        <message>Successful</message>
+        <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+        <authcode/>
+        <batchid/>
+        <timetaken>1</timetaken>
+        <processingtimetaken/>
+        <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+      </response>
     RESPONSE
   end
 
   def unsuccessful_payer_response
     <<~RESPONSE
-    <response timestamp="20190717210119">
-    <merchantid>MerchantId</merchantid>
-    <account>internet</account>
-    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
-    <result>502</result>
-    <message>Unsuccessful</message>
-  </response>
+        <response timestamp="20190717210119">
+        <merchantid>MerchantId</merchantid>
+        <account>internet</account>
+        <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+        <result>502</result>
+        <message>Unsuccessful</message>
+      </response>
     RESPONSE
   end
 
   def successful_store_response
     <<~RESPONSE
-    <response timestamp="20180731090859">
-    <merchantid>MerchantId</merchantid>
-    <account>internet</account>
-    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
-    <result>00</result>
-    <message>Successful</message>
-    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
-    <authcode/>
-    <batchid/>
-    <timetaken>1</timetaken>
-    <processingtimetaken/>
-    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
-  </response>
+        <response timestamp="20180731090859">
+        <merchantid>MerchantId</merchantid>
+        <account>internet</account>
+        <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+        <result>00</result>
+        <message>Successful</message>
+        <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+        <authcode/>
+        <batchid/>
+        <timetaken>1</timetaken>
+        <processingtimetaken/>
+        <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+      </response>
     RESPONSE
   end
 
   def successful_unstore_response
     <<~RESPONSE
-    <response timestamp="20180731090859">
-    <merchantid>MerchantId</merchantid>
-    <account>internet</account>
-    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
-    <result>00</result>
-    <message>Successful</message>
-    <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
-    <authcode/>
-    <batchid/>
-    <timetaken>1</timetaken>
-    <processingtimetaken/>
-    <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
-  </response>
+        <response timestamp="20180731090859">
+        <merchantid>MerchantId</merchantid>
+        <account>internet</account>
+        <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+        <result>00</result>
+        <message>Successful</message>
+        <pasref>415d5e0f6ad247d3825284d1484bd7e9</pasref>
+        <authcode/>
+        <batchid/>
+        <timetaken>1</timetaken>
+        <processingtimetaken/>
+        <sha1hash>5b5fec3c05fe723332bfc0a27c47d067526a3961</sha1hash>
+      </response>
     RESPONSE
   end
 
   def unsuccessful_unstore_response
     <<~RESPONSE
-    <response timestamp="20180731090859">
-    <merchantid>MerchantId</merchantid>
-    <account>internet</account>
-    <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
-    <result>502</result>
-    <message>Unsuccessful</message>
-  </response>
+        <response timestamp="20180731090859">
+        <merchantid>MerchantId</merchantid>
+        <account>internet</account>
+        <orderid>OL0f0VYFQTyNG5IulhsMrg</orderid>
+        <result>502</result>
+        <message>Unsuccessful</message>
+      </response>
     RESPONSE
   end
 
