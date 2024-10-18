@@ -28,21 +28,6 @@ module ActiveMerchant #:nodoc:
         network_token: 'NETWORKTOKEN'
       }
 
-      CARD_CODES = {
-        'visa'             => 'VISA-SSL',
-        'master'           => 'ECMC-SSL',
-        'discover'         => 'DISCOVER-SSL',
-        'american_express' => 'AMEX-SSL',
-        'jcb'              => 'JCB-SSL',
-        'maestro'          => 'MAESTRO-SSL',
-        'diners_club'      => 'DINERS-SSL',
-        'elo'              => 'ELO-SSL',
-        'naranja'          => 'NARANJA-SSL',
-        'cabal'            => 'CABAL-SSL',
-        'unionpay'         => 'CHINAUNIONPAY-SSL',
-        'unknown'          => 'CARD-SSL'
-      }
-
       AVS_CODE_MAP = {
         'A' => 'M', # Match
         'B' => 'P', # Postcode matches, address not verified
@@ -142,6 +127,11 @@ module ActiveMerchant #:nodoc:
       def store(credit_card, options = {})
         requires!(options, :customer)
         store_request(credit_card, options)
+      end
+
+      def inquire(authorization, options = {})
+        order_id = order_id_from_authorization(authorization.to_s) || options[:order_id]
+        commit('direct_inquiry', build_order_inquiry_request(order_id, options), :ok, options)
       end
 
       def supports_scrubbing
@@ -641,7 +631,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_card_details(xml, payment_method, options)
-        xml.tag! card_code_for(payment_method) do
+        xml.tag! 'CARD-SSL' do
           add_card(xml, payment_method, options)
         end
       end
@@ -678,7 +668,8 @@ module ActiveMerchant #:nodoc:
             'year' => format(payment_method.year, :four_digits_year)
           )
         end
-        xml.cardHolderName card_holder_name(payment_method, options)
+        name = card_holder_name(payment_method, options)
+        xml.cardHolderName name if name.present?
         xml.cvc payment_method.verification_value
 
         add_address(xml, (options[:billing_address] || options[:address]), options)
@@ -927,6 +918,8 @@ module ActiveMerchant #:nodoc:
         case action
         when 'store'
           raw[:token].present?
+        when 'direct_inquiry'
+          raw[:last_event].present?
         else
           false
         end
@@ -988,11 +981,17 @@ module ActiveMerchant #:nodoc:
         case payment_method
         when String
           token_type_and_details(payment_method)
-        when NetworkTokenizationCreditCard
-          { payment_type: :network_token }
         else
-          { payment_type: :credit }
+          type = network_token?(payment_method) ? :network_token : :credit
+
+          { payment_type: type }
         end
+      end
+
+      def network_token?(payment_method)
+        payment_method.respond_to?(:source) &&
+          payment_method.respond_to?(:payment_cryptogram) &&
+          payment_method.respond_to?(:eci)
       end
 
       def token_type_and_details(token)
@@ -1018,10 +1017,6 @@ module ActiveMerchant #:nodoc:
         return 3 if three_decimal_currency?(currency)
 
         return 2
-      end
-
-      def card_code_for(payment_method)
-        CARD_CODES[card_brand(payment_method)] || CARD_CODES['unknown']
       end
 
       def eligible_for_0_auth?(payment_method, options = {})

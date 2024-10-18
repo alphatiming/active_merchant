@@ -6,6 +6,7 @@ class RemoteWorldpayTest < Test::Unit::TestCase
     @cftgateway = WorldpayGateway.new(fixtures(:world_pay_gateway_cft))
 
     @amount = 100
+    @year = (Time.now.year + 2).to_s[-2..-1].to_i
     @credit_card = credit_card('4111111111111111')
     @amex_card = credit_card('3714 496353 98431')
     @elo_credit_card = credit_card('4514 1600 0000 0008',
@@ -17,7 +18,7 @@ class RemoteWorldpayTest < Test::Unit::TestCase
       brand: 'elo')
     @credit_card_with_two_digits_year = credit_card('4111111111111111',
       month: 10,
-      year: 22)
+      year: @year)
     @cabal_card = credit_card('6035220000000006')
     @naranja_card = credit_card('5895620000000002')
     @sodexo_voucher = credit_card('6060704495764400', brand: 'sodexo')
@@ -1155,6 +1156,31 @@ class RemoteWorldpayTest < Test::Unit::TestCase
     assert purchase = @cftgateway.purchase(@amount, @credit_card, options.merge(instalments: 3, skip_capture: true, authorization_validated: true))
     assert_success purchase
   end
+
+  # There is a delay of up to 5 minutes for a transaction to be recorded by Worldpay. Inquiring
+  # too soon will result in an error "Order not ready". Leaving commented out due to included sleeps.
+  # def test_successful_inquire_with_order_id
+  #   order_id = @options[:order_id]
+  #   assert auth = @gateway.authorize(@amount, @credit_card, @options)
+  #   assert_success auth
+  #   assert auth.authorization
+  #   sleep 60
+
+  #   assert inquire = @gateway.inquire(nil, { order_id: order_id })
+  #   assert_success inquire
+  #   assert auth.authorization == inquire.authorization
+  # end
+
+  # def test_successful_inquire_with_authorization
+  #   assert auth = @gateway.authorize(@amount, @credit_card, @options)
+  #   assert_success auth
+  #   assert auth.authorization
+  #   sleep 60
+
+  #   assert inquire = @gateway.inquire(auth.authorization, {})
+  #   assert_success inquire
+  #   assert auth.authorization == inquire.authorization
+  # end
 
   private
 

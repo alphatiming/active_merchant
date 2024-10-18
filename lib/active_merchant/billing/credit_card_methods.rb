@@ -8,6 +8,7 @@ module ActiveMerchant #:nodoc:
         'visa'               => ->(num) { num =~ /^4\d{12}(\d{3})?(\d{3})?$/ },
         'master'             => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), MASTERCARD_RANGES) },
         'elo'                => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), ELO_RANGES) },
+        'cabal'              => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 8), CABAL_RANGES) },
         'alelo'              => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), ALELO_RANGES) },
         'discover'           => ->(num) { num =~ /^(6011|65\d{2}|64[4-9]\d)\d{12,15}$/ },
         'american_express'   => ->(num) { num =~ /^3[47]\d{13}$/ },
@@ -23,10 +24,9 @@ module ActiveMerchant #:nodoc:
         },
         'maestro_no_luhn'    => ->(num) { num =~ /^(501080|501081|501082)\d{6,13}$/ },
         'forbrugsforeningen' => ->(num) { num =~ /^600722\d{10}$/ },
-        'sodexo'             => ->(num) { num =~ /^(606071|603389|606070|606069|606068|600818)\d{10}$/ },
+        'sodexo'             => ->(num) { num =~ /^(606071|603389|606070|606069|606068|600818|505864|505865)\d{10}$/ },
         'alia'               => ->(num) { num =~ /^(504997|505878|601030|601073|505874)\d{10}$/ },
         'vr'                 => ->(num) { num =~ /^(627416|637036)\d{10}$/ },
-        'cabal'              => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 8), CABAL_RANGES) },
         'unionpay'           => ->(num) { (16..19).cover?(num&.size) && in_bin_range?(num.slice(0, 8), UNIONPAY_RANGES) },
         'carnet'             => lambda { |num|
           num&.size == 16 && (
@@ -41,8 +41,16 @@ module ActiveMerchant #:nodoc:
         'synchrony' => ->(num) { num =~ /^700600\d{10}$/ },
         'routex' => ->(num) { num =~ /^(700676|700678)\d{13}$/ },
         'mada' => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), MADA_RANGES) },
-        'bp_plus' => ->(num) { num =~ /^(7050\d\s\d{9}\s\d{3}$|705\d\s\d{8}\s\d{5}$)/ }
+        'bp_plus' => ->(num) { num =~ /^(7050\d\s\d{9}\s\d{3}$|705\d\s\d{8}\s\d{5}$)/ },
+        'passcard' => ->(num) { num =~ /^628026\d{10}$/ },
+        'edenred' => ->(num) { num =~ /^637483\d{10}$/ },
+        'anda' => ->(num) { num =~ /^603199\d{10}$/ },
+        'tarjeta-d' => ->(num) { num =~ /^601828\d{10}$/ },
+        'hipercard' => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), HIPERCARD_RANGES) },
+        'panal' => ->(num) { num&.size == 16 && in_bin_range?(num.slice(0, 6), PANAL_RANGES) }
       }
+
+      SODEXO_NO_LUHN = ->(num) { num =~ /^(505864|505865)\d{10}$/ }
 
       # http://www.barclaycard.co.uk/business/files/bin_rules.pdf
       ELECTRON_RANGES = [
@@ -102,7 +110,7 @@ module ActiveMerchant #:nodoc:
       MAESTRO_BINS = Set.new(
         %w[ 500057
             501018 501043 501045 501047 501049 501051 501072 501075 501083 501087 501089 501095
-            501500
+            501500 501623
             501879 502113 502120 502121 502301
             503175 503337 503645 503670
             504310 504338 504363 504533 504587 504620 504639 504656 504738 504781 504910
@@ -175,7 +183,8 @@ module ActiveMerchant #:nodoc:
         (601256..601276),
         (601640..601652),
         (601689..601700),
-        (602011..602050),
+        (602011..602048),
+        [602050],
         (630400..630499),
         (639000..639099),
         (670000..679999),
@@ -187,10 +196,10 @@ module ActiveMerchant #:nodoc:
         506745..506747, 506753..506753, 506774..506778, 509000..509007, 509009..509014,
         509020..509030, 509035..509042, 509044..509089, 509091..509101, 509104..509807,
         509831..509877, 509897..509900, 509918..509964, 509971..509986, 509995..509999,
-        627780..627780, 636368..636368, 650031..650033, 650035..650051, 650057..650081,
-        650406..650439, 650485..650504, 650506..650538, 650552..650598, 650720..650727,
-        650901..650922, 650928..650928, 650938..650939, 650946..650978, 651652..651704,
-        655000..655019, 655021..655057
+        627780..627780, 636297..636298, 636368..636368, 650031..650033, 650035..650051,
+        650057..650081, 650406..650439, 650485..650504, 650506..650538, 650552..650598,
+        650720..650727, 650901..650922, 650928..650928, 650938..650939, 650946..650978,
+        651652..651704, 655000..655019, 655021..655057
       ]
 
       # Alelo provides BIN ranges by e-mailing them out periodically.
@@ -210,7 +219,9 @@ module ActiveMerchant #:nodoc:
       CABAL_RANGES = [
         60420100..60440099,
         58965700..58965799,
-        60352200..60352299
+        60352200..60352299,
+        65027200..65027299,
+        65008700..65008700
       ]
 
       MADA_RANGES = [
@@ -232,6 +243,13 @@ module ActiveMerchant #:nodoc:
       JCB_RANGES = [
         3528..3589, 3088..3094, 3096..3102, 3112..3120, 3158..3159, 3337..3349
       ]
+
+      HIPERCARD_RANGES = [
+        384100..384100, 384140..384140, 384160..384160, 606282..606282, 637095..637095,
+        637568..637568, 637599..637599, 637609..637609, 637612..637612
+      ]
+
+      PANAL_RANGES = [[602049]]
 
       def self.included(base)
         base.extend(ClassMethods)
@@ -386,16 +404,22 @@ module ActiveMerchant #:nodoc:
             %w[1 2 3 success failure error].include?(number)
         end
 
+        def sodexo_no_luhn?(numbers)
+          SODEXO_NO_LUHN.call(numbers)
+        end
+
         def valid_by_algorithm?(brand, numbers) #:nodoc:
           case brand
           when 'naranja'
             valid_naranja_algo?(numbers)
           when 'creditel'
             valid_creditel_algo?(numbers)
-          when 'alia', 'confiable', 'maestro_no_luhn'
+          when 'alia', 'confiable', 'maestro_no_luhn', 'anda', 'tarjeta-d', 'hipercard'
             true
-          when 'bp_plus'
-            valid_bp_plus_algo?(numbers)
+          when 'sodexo'
+            sodexo_no_luhn?(numbers) ? true : valid_luhn?(numbers)
+          when 'bp_plus', 'passcard', 'edenred'
+            valid_luhn_non_zero_check_digit?(numbers)
           else
             valid_luhn?(numbers)
           end
@@ -461,7 +485,7 @@ module ActiveMerchant #:nodoc:
           (10 - (sum % 10)) % 10 == check_digit.to_i
         end
 
-        def valid_bp_plus_algo?(numbers)
+        def valid_luhn_non_zero_check_digit?(numbers)
           return valid_luhn?(numbers.delete(' ')) if numbers[5] == ' '
 
           check_digit = numbers[-1]

@@ -42,6 +42,23 @@ class CredoraxTest < Test::Unit::TestCase
         }
       }
     }
+
+    @nt_credit_card = network_tokenization_credit_card('4176661000001015',
+      brand: 'visa',
+      eci: '07',
+      source: :network_token,
+      payment_cryptogram: 'AgAAAAAAosVKVV7FplLgQRYAAAA=')
+
+    @apple_pay_card = network_tokenization_credit_card('4176661000001015',
+      month: 10,
+      year: Time.new.year + 2,
+      first_name: 'John',
+      last_name: 'Smith',
+      verification_value: '737',
+      payment_cryptogram: 'YwAAAAAABaYcCMX/OhNRQAAAAAA=',
+      eci: '07',
+      transaction_id: 'abc123',
+      source: :apple_pay)
   end
 
   def test_supported_card_types
@@ -888,7 +905,7 @@ class CredoraxTest < Test::Unit::TestCase
     end.check_request do |_endpoint, data, _headers|
       assert_match(/a9=1/, data)
     end.respond_with(successful_authorize_response)
-
+    assert_match(/z50=abc123/, successful_authorize_response)
     assert_success response
   end
 
@@ -986,6 +1003,7 @@ class CredoraxTest < Test::Unit::TestCase
       @gateway.authorize(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
       assert_match(/a9=8/, data)
+      assert_match(/g6=abc123/, data)
     end.respond_with(successful_authorize_response)
 
     assert_success response
@@ -997,6 +1015,7 @@ class CredoraxTest < Test::Unit::TestCase
       @gateway.purchase(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
       assert_match(/a9=2/, data)
+      assert_match(/g6=abc123/, data)
     end.respond_with(successful_authorize_response)
 
     assert_success response
@@ -1048,6 +1067,26 @@ class CredoraxTest < Test::Unit::TestCase
     assert_equal post, {}
   end
 
+  def test_successful_purchase_with_network_token
+    response = stub_comms do
+      @gateway.purchase(@amount, @nt_credit_card)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/b21=vts_mdes_token&token_eci=07&token_crypto=AgAAAAAAosVKVV7FplLgQRYAAAA%3D/, data)
+    end.respond_with(successful_purchase_response)
+    assert_success response
+  end
+
+  def test_successful_purchase_with_other_than_network_token
+    response = stub_comms do
+      @gateway.purchase(@amount, @apple_pay_card)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/b21=applepay/, data)
+      assert_match(/token_eci=07/, data)
+      assert_not_match(/token_crypto=/, data)
+    end.respond_with(successful_purchase_response)
+    assert_success response
+  end
+
   private
 
   def stored_credential_options(*args, id: nil)
@@ -1069,7 +1108,7 @@ class CredoraxTest < Test::Unit::TestCase
   end
 
   def successful_authorize_response
-    'M=SPREE978&O=2&T=03%2F09%2F2016+03%3A08%3A58&V=413&a1=90f7449d555f7bed0a2c5d780475f0bf&a2=2&a4=100&a9=6&z1=8a829449535154bc0153595952a2517a&z13=606944188284&z14=U&z15=100&z2=0&z3=Transaction+has+been+executed+successfully.&z4=006597&z5=0&z6=00&z9=X&K=00effd2c80ab7ecd45b499c0bbea3d20'
+    'M=SPREE978&O=2&T=03%2F09%2F2016+03%3A08%3A58&V=413&a1=90f7449d555f7bed0a2c5d780475f0bf&a2=2&a4=100&a9=6&z1=8a829449535154bc0153595952a2517a&z13=606944188284&z14=U&z15=100&z2=0&z3=Transaction+has+been+executed+successfully.&z4=006597&z5=0&z6=00&z9=X&K=00effd2c80ab7ecd45b499c0bbea3d20z50=abc123'
   end
 
   def failed_authorize_response

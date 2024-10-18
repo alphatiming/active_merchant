@@ -145,11 +145,63 @@ class WorldpayTest < Test::Unit::TestCase
     }
   end
 
+  def test_payment_type_for_network_card
+    payment = @gateway.send(:payment_details, @nt_credit_card)[:payment_type]
+    assert_equal payment, :network_token
+  end
+
+  def test_payment_type_returns_network_token_if_the_payment_method_responds_to_source_payment_cryptogram_and_eci
+    payment_method = mock
+    payment_method.stubs(source: nil, payment_cryptogram: nil, eci: nil)
+    result = @gateway.send(:payment_details, payment_method)
+    assert_equal({ payment_type: :network_token }, result)
+  end
+
+  def test_payment_type_returns_credit_if_the_payment_method_does_not_responds_to_source
+    payment_method = mock
+    payment_method.stubs(payment_cryptogram: nil, eci: nil)
+    result = @gateway.send(:payment_details, payment_method)
+    assert_equal({ payment_type: :credit }, result)
+  end
+
+  def test_payment_type_returns_credit_if_the_payment_method_does_not_responds_to_payment_cryptogram
+    payment_method = mock
+    payment_method.stubs(source: nil, eci: nil)
+    result = @gateway.send(:payment_details, payment_method)
+    assert_equal({ payment_type: :credit }, result)
+  end
+
+  def test_payment_type_returns_credit_if_the_payment_method_does_not_responds_to_eci
+    payment_method = mock
+    payment_method.stubs(source: nil, payment_cryptogram: nil)
+    result = @gateway.send(:payment_details, payment_method)
+    assert_equal({ payment_type: :credit }, result)
+  end
+
+  def test_payment_type_for_credit_card
+    payment = @gateway.send(:payment_details, @credit_card)[:payment_type]
+    assert_equal payment, :credit
+  end
+
   def test_successful_authorize
     response = stub_comms do
       @gateway.authorize(@amount, @credit_card, @options)
     end.check_request do |_endpoint, data, _headers|
       assert_match(/4242424242424242/, data)
+      assert_match(/cardHolderName/, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
+    assert_equal 'R50704213207145707', response.authorization
+  end
+
+  def test_successful_authorize_without_name
+    credit_card = credit_card('4242424242424242', first_name: nil, last_name: nil)
+    response = stub_comms do
+      @gateway.authorize(@amount, credit_card, @options)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/4242424242424242/, data)
+      assert_no_match(/cardHolderName/, data)
+      assert_match(/CARD-SSL/, data)
     end.respond_with(successful_authorize_response)
     assert_success response
     assert_equal 'R50704213207145707', response.authorization
@@ -1122,7 +1174,7 @@ class WorldpayTest < Test::Unit::TestCase
       assert_match %r(4242424242424242), data
       assert_no_match %r(<order>), data
       assert_no_match %r(<paymentDetails>), data
-      assert_no_match %r(<VISA-SSL>), data
+      assert_no_match %r(<CARD-SSL>), data
     end.respond_with(successful_store_response)
 
     assert_success response
@@ -1372,6 +1424,26 @@ class WorldpayTest < Test::Unit::TestCase
       assert_match %r(<order orderCode="abc1234abc1234abc1234abc1234abc1234abc1234abc1234abc1234abc1234ab">), data
     end.respond_with(successful_authorize_response)
     assert_success response
+  end
+
+  def test_successful_inquire_with_order_id
+    response = stub_comms do
+      @gateway.inquire(nil, { order_id: @options[:order_id].to_s })
+    end.check_request do |_endpoint, data, _headers|
+      assert_tag_with_attributes('orderInquiry', { 'orderCode' => @options[:order_id].to_s }, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
+    assert_equal 'R50704213207145707', response.authorization
+  end
+
+  def test_successful_inquire_with_authorization
+    response = stub_comms do
+      @gateway.inquire(@options[:order_id].to_s, {})
+    end.check_request do |_endpoint, data, _headers|
+      assert_tag_with_attributes('orderInquiry', { 'orderCode' => @options[:order_id].to_s }, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
+    assert_equal 'R50704213207145707', response.authorization
   end
 
   private
@@ -2064,7 +2136,7 @@ class WorldpayTest < Test::Unit::TestCase
           <amount value="100" exponent="2" currencyCode="HKD"/>
           <orderContent>Products Products Products</orderContent>
           <paymentDetails>
-            <VISA-SSL>
+            <CARD-SSL>
               <cardNumber>4242424242424242</cardNumber>
               <expiryDate>
                 <date month="09" year="2011"/>
@@ -2084,7 +2156,7 @@ class WorldpayTest < Test::Unit::TestCase
                   <telephoneNumber>(555)555-5555</telephoneNumber>
                 </address>
               </cardAddress>
-            </VISA-SSL>
+            </CARD-SSL>
             <session id="asfasfasfasdgvsdzvxzcvsd" shopperIPAddress="127.0.0.1"/>
           </paymentDetails>
           <shopper>
@@ -2107,7 +2179,7 @@ class WorldpayTest < Test::Unit::TestCase
             <description>Purchase</description>
             <amount value="100" currencyCode="GBP" exponent="2"/>
             <paymentDetails>
-              <VISA-SSL>
+              <CARD-SSL>
                 <cardNumber>4111111111111111</cardNumber>
                 <expiryDate>
                   <date month="09" year="2016"/>
@@ -2123,7 +2195,7 @@ class WorldpayTest < Test::Unit::TestCase
                     <countryCode>US</countryCode>
                   </address>
                 </cardAddress>
-              </VISA-SSL>
+              </CARD-SSL>
             </paymentDetails>
             <shopper>
               <shopperEmailAddress>wow@example.com</shopperEmailAddress>
@@ -2142,7 +2214,7 @@ class WorldpayTest < Test::Unit::TestCase
             <description>Purchase</description>
             <amount value="100" currencyCode="GBP" exponent="2"/>
             <paymentDetails>
-              <VISA-SSL>
+              <CARD-SSL>
                 <cardNumber>[FILTERED]</cardNumber>
                 <expiryDate>
                   <date month="09" year="2016"/>
@@ -2158,7 +2230,7 @@ class WorldpayTest < Test::Unit::TestCase
                     <countryCode>US</countryCode>
                   </address>
                 </cardAddress>
-              </VISA-SSL>
+              </CARD-SSL>
             </paymentDetails>
             <shopper>
               <shopperEmailAddress>wow@example.com</shopperEmailAddress>

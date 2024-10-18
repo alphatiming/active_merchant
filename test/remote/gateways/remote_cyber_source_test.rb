@@ -62,7 +62,20 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
       ignore_cvv: 'true',
       commerce_indicator: 'internet',
       user_po: 'ABC123',
-      taxable: true
+      taxable: true,
+      sales_slip_number: '456',
+      airline_agent_code: '7Q',
+      tax_management_indicator: 1,
+      invoice_amount: '3',
+      original_amount: '4',
+      reference_data_code: 'ABC123',
+      invoice_number: '123',
+      mobile_remote_payment_type: 'A1',
+      vat_tax_rate: '1'
+    }
+
+    @capture_options = {
+      gratuity_amount: '3.50'
     }
 
     @subscription_options = {
@@ -209,7 +222,22 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
   end
 
   def test_successful_authorization_with_installment_data
-    options = @options.merge(installment_total_count: 5, installment_plan_type: 1, first_installment_date: '300101')
+    options = @options.merge(
+      installment_total_count: 2,
+      installment_total_amount: 0.50,
+      installment_plan_type: 1,
+      first_installment_date: '300101',
+      installment_annual_interest_rate: 1.09,
+      installment_grace_period_duration: 1
+    )
+    assert response = @gateway.authorize(@amount, @credit_card, options)
+    assert_successful_response(response)
+    assert !response.authorization.blank?
+  end
+
+  def test_successful_authorization_with_less_installment_data
+    options = @options.merge(installment_grace_period_duration: '1')
+
     assert response = @gateway.authorize(@amount, @credit_card, options)
     assert_successful_response(response)
     assert !response.authorization.blank?
@@ -229,6 +257,12 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
 
   def test_successful_authorization_with_airline_agent_code
     options = @options.merge(airline_agent_code: '7Q')
+    assert response = @gateway.authorize(@amount, @credit_card, options)
+    assert_successful_response(response)
+  end
+
+  def test_successful_authorization_with_tax_mgmt_indicator
+    options = @options.merge(tax_management_indicator: '3')
     assert response = @gateway.authorize(@amount, @credit_card, options)
     assert_successful_response(response)
   end
@@ -334,6 +368,22 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
 
   def test_successful_purchase_with_bank_account
     bank_account = check({ account_number: '4100', routing_number: '011000015' })
+    assert response = @gateway.purchase(10000, bank_account, @options)
+    assert_successful_response(response)
+  end
+
+  # To properly run this test couple of test your account needs to be enabled to
+  # handle canadian bank accounts.
+  def test_successful_purchase_with_a_canadian_bank_account_full_number
+    bank_account = check({ account_number: '4100', routing_number: '011000015' })
+    @options[:currency] = 'CAD'
+    assert response = @gateway.purchase(10000, bank_account, @options)
+    assert_successful_response(response)
+  end
+
+  def test_successful_purchase_with_a_canadian_bank_account_8_digit_number
+    bank_account = check({ account_number: '4100', routing_number: '11000015' })
+    @options[:currency] = 'CAD'
     assert response = @gateway.purchase(10000, bank_account, @options)
     assert_successful_response(response)
   end
@@ -527,7 +577,7 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
     assert auth = @gateway.authorize(@amount, @credit_card, @options)
     assert_successful_response(auth)
 
-    assert capture = @gateway.capture(@amount, auth.authorization)
+    assert capture = @gateway.capture(@amount, auth.authorization, @capture_options)
     assert_successful_response(capture)
   end
 
@@ -690,6 +740,8 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
     assert_successful_response(capture)
   end
 
+  # this test should probably be removed, the fields do not appear to be part of the
+  # most current XSD file, also they are not added to the request correctly as top level fields
   def test_merchant_description
     merchant_options = {
       merchantInformation: {
@@ -717,6 +769,11 @@ class RemoteCyberSourceTest < Test::Unit::TestCase
   def test_successful_authorize_with_nonfractional_currency
     assert response = @gateway.authorize(100, @credit_card, @options.merge(currency: 'JPY'))
     assert_equal '1', response.params['amount']
+    assert_successful_response(response)
+  end
+
+  def test_successful_authorize_with_additional_purchase_totals_data
+    assert response = @gateway.authorize(100, @credit_card, @options.merge(discount_management_indicator: 'T', purchase_tax_amount: 7.89))
     assert_successful_response(response)
   end
 

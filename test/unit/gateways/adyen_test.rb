@@ -258,6 +258,54 @@ class AdyenTest < Test::Unit::TestCase
     assert_equal '702', response.error_code
   end
 
+  def test_billing_address_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_billing_address_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:incorrect_address], response.error_code
+  end
+
+  def test_cvc_length_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_cvc_validation_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:invalid_cvc], response.error_code
+  end
+
+  def test_invalid_card_number_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_invalid_card_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:incorrect_number], response.error_code
+  end
+
+  def test_invalid_amount_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_invalid_amount_response)
+
+    response = @gateway.authorize(nil, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:invalid_amount], response.error_code
+  end
+
+  def test_invalid_access_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_not_allowed_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:config_error], response.error_code
+  end
+
+  def test_unknown_reason_error_code_mapping
+    @gateway.expects(:ssl_post).returns(failed_unknown_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal AdyenGateway::STANDARD_ERROR_CODE[:processing_error], response.error_code
+  end
+
   def test_failed_authorise3d
     @gateway.expects(:ssl_post).returns(failed_authorize_response)
 
@@ -276,6 +324,24 @@ class AdyenTest < Test::Unit::TestCase
     assert_failure response
   end
 
+  def test_failed_authorise_visa
+    @gateway.expects(:ssl_post).returns(failed_authorize_visa_response)
+
+    response = @gateway.send(:commit, 'authorise', {}, {})
+
+    assert_equal 'Refused | 01: Refer to card issuer', response.message
+    assert_failure response
+  end
+
+  def test_failed_authorise_mastercard
+    @gateway.expects(:ssl_post).returns(failed_authorize_mastercard_response)
+
+    response = @gateway.send(:commit, 'authorise', {}, {})
+
+    assert_equal 'Refused | 01 : New account information available', response.message
+    assert_failure response
+  end
+
   def test_successful_capture
     @gateway.expects(:ssl_post).returns(successful_capture_response)
     response = @gateway.capture(@amount, '7914775043909934')
@@ -290,6 +356,14 @@ class AdyenTest < Test::Unit::TestCase
     assert_nil response.authorization
     assert_equal 'Original pspReference required for this operation', response.message
     assert_failure response
+  end
+
+  def test_successful_capture_with_shopper_statement
+    stub_comms do
+      @gateway.capture(@amount, '7914775043909934', @options.merge(shopper_statement: 'test1234'))
+    end.check_request do |_endpoint, data, _headers|
+      assert_equal 'test1234', JSON.parse(data)['additionalData']['shopperStatement']
+    end.respond_with(successful_capture_response)
   end
 
   def test_successful_purchase_with_credit_card
@@ -611,6 +685,30 @@ class AdyenTest < Test::Unit::TestCase
       assert_match(/"recurringProcessingModel":"UnscheduledCardOnFile"/, data)
     end.respond_with(successful_authorize_response)
 
+    assert_success response
+  end
+
+  def test_skip_mpi_data_field_omits_mpi_hash
+    options = {
+      billing_address: address(),
+      shipping_address: address(),
+      shopper_reference: 'John Smith',
+      order_id: '1001',
+      description: 'AM test',
+      currency: 'GBP',
+      customer: '123',
+      skip_mpi_data: 'Y',
+      shopper_interaction: 'ContAuth',
+      recurring_processing_model: 'Subscription',
+      network_transaction_id: '123ABC'
+    }
+    response = stub_comms do
+      @gateway.authorize(@amount, @apple_pay_card, options)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/"shopperInteraction":"ContAuth"/, data)
+      assert_match(/"recurringProcessingModel":"Subscription"/, data)
+      refute_includes data, 'mpiData'
+    end.respond_with(successful_authorize_response)
     assert_success response
   end
 
@@ -1160,6 +1258,162 @@ class AdyenTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_level_2_data
+    level_2_options = {
+      total_tax_amount: '160',
+      customer_reference: '101'
+    }
+
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(level_2_data: level_2_options))
+    end.check_request do |_endpoint, data, _headers|
+      parsed = JSON.parse(data)
+      additional_data = parsed['additionalData']
+      assert_equal additional_data['enhancedSchemeData.totalTaxAmount'], level_2_options[:total_tax_amount]
+      assert_equal additional_data['enhancedSchemeData.customerReference'], level_2_options[:customer_reference]
+    end.respond_with(successful_authorize_response)
+
+    assert_success response
+  end
+
+  def test_level_3_data
+    level_3_options = {
+      total_tax_amount: '12800',
+      customer_reference: '101',
+      freight_amount: '300',
+      destination_state_province_code: 'NYC',
+      ship_from_postal_code: '1082GM',
+      order_date: '101216',
+      destination_postal_code: '1082GM',
+      destination_country_code: 'NLD',
+      duty_amount: '500',
+      items: [
+        {
+          description: 'T16 Test products 1',
+          product_code: 'TEST120',
+          commodity_code: 'COMMCODE1',
+          quantity: '5',
+          unit_of_measure: 'm',
+          unit_price: '1000',
+          discount_amount: '60',
+          total_amount: '4940'
+        }
+      ]
+    }
+
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(level_3_data: level_3_options))
+    end.check_request do |_endpoint, data, _headers|
+      parsed = JSON.parse(data)
+      additional_data = parsed['additionalData']
+      leve_3_keys = ['enhancedSchemeData.freightAmount', 'enhancedSchemeData.destinationStateProvinceCode',
+                     'enhancedSchemeData.shipFromPostalCode', 'enhancedSchemeData.orderDate', 'enhancedSchemeData.destinationPostalCode',
+                     'enhancedSchemeData.destinationCountryCode', 'enhancedSchemeData.dutyAmount',
+                     'enhancedSchemeData.itemDetailLine1.description', 'enhancedSchemeData.itemDetailLine1.productCode',
+                     'enhancedSchemeData.itemDetailLine1.commodityCode', 'enhancedSchemeData.itemDetailLine1.quantity',
+                     'enhancedSchemeData.itemDetailLine1.unitOfMeasure', 'enhancedSchemeData.itemDetailLine1.unitPrice',
+                     'enhancedSchemeData.itemDetailLine1.discountAmount', 'enhancedSchemeData.itemDetailLine1.totalAmount']
+
+      additional_data_keys = additional_data.keys
+      assert_all(leve_3_keys) { |item| additional_data_keys.include?(item) }
+
+      mapper = { "enhancedSchemeData.freightAmount": 'freight_amount',
+                "enhancedSchemeData.destinationStateProvinceCode": 'destination_state_province_code',
+                "enhancedSchemeData.shipFromPostalCode": 'ship_from_postal_code',
+                "enhancedSchemeData.orderDate": 'order_date',
+                "enhancedSchemeData.destinationPostalCode": 'destination_postal_code',
+                "enhancedSchemeData.destinationCountryCode": 'destination_country_code',
+                "enhancedSchemeData.dutyAmount": 'duty_amount' }
+
+      mapper.each do |item|
+        assert_equal additional_data[item[0]], level_3_options[item[1]]
+      end
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
+  def test_succesful_additional_airline_data
+    airline_data = {
+      agency_invoice_number: 'BAC123',
+      agency_plan_name: 'plan name',
+      airline_code: '434234',
+      airline_designator_code: '1234',
+      boarding_fee: '100',
+      computerized_reservation_system: 'abcd',
+      customer_reference_number: 'asdf1234',
+      document_type: 'cc',
+      leg: {
+        carrier_code: 'KL'
+      },
+      passenger: {
+        first_name: 'Joe',
+        last_name: 'Doe'
+      }
+    }
+
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(additional_data_airline: airline_data))
+    end.check_request do |_endpoint, data, _headers|
+      parsed = JSON.parse(data)
+      additional_data = parsed['additionalData']
+      assert_equal additional_data['airline.agency_invoice_number'], airline_data[:agency_invoice_number]
+      assert_equal additional_data['airline.agency_plan_name'], airline_data[:agency_plan_name]
+      assert_equal additional_data['airline.airline_code'], airline_data[:airline_code]
+      assert_equal additional_data['airline.airline_designator_code'], airline_data[:airline_designator_code]
+      assert_equal additional_data['airline.boarding_fee'], airline_data[:boarding_fee]
+      assert_equal additional_data['airline.computerized_reservation_system'], airline_data[:computerized_reservation_system]
+      assert_equal additional_data['airline.customer_reference_number'], airline_data[:customer_reference_number]
+      assert_equal additional_data['airline.document_type'], airline_data[:document_type]
+      assert_equal additional_data['airline.flight_date'], airline_data[:flight_date]
+      assert_equal additional_data['airline.ticket_issue_address'], airline_data[:abcqwer]
+      assert_equal additional_data['airline.ticket_number'], airline_data[:ticket_number]
+      assert_equal additional_data['airline.travel_agency_code'], airline_data[:travel_agency_code]
+      assert_equal additional_data['airline.travel_agency_name'], airline_data[:travel_agency_name]
+      assert_equal additional_data['airline.passenger_name'], airline_data[:passenger_name]
+      assert_equal additional_data['airline.leg.carrier_code'], airline_data[:leg][:carrier_code]
+      assert_equal additional_data['airline.leg.class_of_travel'], airline_data[:leg][:class_of_travel]
+      assert_equal additional_data['airline.passenger.first_name'], airline_data[:passenger][:first_name]
+      assert_equal additional_data['airline.passenger.last_name'], airline_data[:passenger][:last_name]
+      assert_equal additional_data['airline.passenger.telephone_number'], airline_data[:passenger][:telephone_number]
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
+  def test_additional_data_lodging
+    lodging_data = {
+      check_in_date: '20230822',
+      check_out_date: '20230830',
+      customer_service_toll_free_number: '234234',
+      fire_safety_act_indicator: 'abc123',
+      folio_cash_advances: '1234667',
+      folio_number: '32343',
+      food_beverage_charges: '1234',
+      no_show_indicator: 'Y',
+      prepaid_expenses: '100',
+      property_phone_number: '54545454',
+      number_of_nights: '5'
+    }
+
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(additional_data_lodging: lodging_data))
+    end.check_request do |_endpoint, data, _headers|
+      parsed = JSON.parse(data)
+      additional_data = parsed['additionalData']
+      assert_equal additional_data['lodging.checkInDate'], lodging_data[:check_in_date]
+      assert_equal additional_data['lodging.checkOutDate'], lodging_data[:check_out_date]
+      assert_equal additional_data['lodging.customerServiceTollFreeNumber'], lodging_data[:customer_service_toll_free_number]
+      assert_equal additional_data['lodging.fireSafetyActIndicator'], lodging_data[:fire_safety_act_indicator]
+      assert_equal additional_data['lodging.folioCashAdvances'], lodging_data[:folio_cash_advances]
+      assert_equal additional_data['lodging.folioNumber'], lodging_data[:folio_number]
+      assert_equal additional_data['lodging.foodBeverageCharges'], lodging_data[:food_beverage_charges]
+      assert_equal additional_data['lodging.noShowIndicator'], lodging_data[:no_show_indicator]
+      assert_equal additional_data['lodging.prepaidExpenses'], lodging_data[:prepaid_expenses]
+      assert_equal additional_data['lodging.propertyPhoneNumber'], lodging_data[:property_phone_number]
+      assert_equal additional_data['lodging.room1.numberOfNights'], lodging_data[:number_of_nights]
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
   def test_extended_avs_response
     response = stub_comms do
       @gateway.verify(@credit_card, @options)
@@ -1501,6 +1755,35 @@ class AdyenTest < Test::Unit::TestCase
     RESPONSE
   end
 
+  def failed_authorize_visa_response
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "refusalReasonRaw": "01: Refer to card issuer"
+       },
+       "refusalReason": "Refused",
+       "pspReference":"8514775559925128",
+       "resultCode":"Refused"
+     }
+    RESPONSE
+  end
+
+  def failed_authorize_mastercard_response
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "refusalReasonRaw": "01: Refer to card issuer",
+        "merchantAdviceCode": "01 : New account information available"
+       },
+       "refusalReason": "Refused",
+       "pspReference":"8514775559925128",
+       "resultCode":"Refused"
+     }
+    RESPONSE
+  end
+
   def successful_capture_response
     <<-RESPONSE
     {
@@ -1629,6 +1912,72 @@ class AdyenTest < Test::Unit::TestCase
       "resultCode":"Authorised",
       "authCode":"31265"
     }
+    RESPONSE
+  end
+
+  def failed_unknown_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "0",
+        "message": "An unknown error occurred",
+        "errorType": "validation"
+      }
+    RESPONSE
+  end
+
+  def failed_not_allowed_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "10",
+        "message": "You are not allowed to perform this action",
+        "errorType": "validation"
+      }
+    RESPONSE
+  end
+
+  def failed_invalid_amount_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "100",
+        "message": "There is no amount specified in the request",
+        "errorType": "validation"
+      }
+    RESPONSE
+  end
+
+  def failed_invalid_card_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "101",
+        "message": "The specified card number is not valid",
+        "errorType": "validation"
+      }
+    RESPONSE
+  end
+
+  def failed_cvc_validation_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "103",
+        "message": "The length of the CVC code is not correct for the given card number",
+        "errorType": "validation"
+      }
+    RESPONSE
+  end
+
+  def failed_billing_address_response
+    <<~RESPONSE
+      {
+        "status": 422,
+        "errorCode": "104",
+        "message": "There was an error in the specified billing address fields",
+        "errorType": "validation"
+      }
     RESPONSE
   end
 

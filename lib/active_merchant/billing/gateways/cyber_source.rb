@@ -22,8 +22,8 @@ module ActiveMerchant #:nodoc:
       self.live_url = 'https://ics2wsa.ic3.com/commerce/1.x/transactionProcessor'
 
       # Schema files can be found here: https://ics2ws.ic3.com/commerce/1.x/transactionProcessor/
-      TEST_XSD_VERSION = '1.198'
-      PRODUCTION_XSD_VERSION = '1.198'
+      TEST_XSD_VERSION = '1.201'
+      PRODUCTION_XSD_VERSION = '1.201'
       ECI_BRAND_MAPPING = {
         visa: 'vbv',
         master: 'spa',
@@ -130,6 +130,11 @@ module ActiveMerchant #:nodoc:
         r701: 'Export bill_country/ship_country match',
         r702: 'Export email_country match',
         r703: 'Export hostname_country/ip_country match'
+      }
+
+      @@payment_solution = {
+        apple_pay: '001',
+        google_pay: '012'
       }
 
       # These are the options that can be used when creating a new CyberSource
@@ -318,15 +323,17 @@ module ActiveMerchant #:nodoc:
         add_mdd_fields(xml, options)
         add_auth_service(xml, creditcard_or_reference, options)
         add_threeds_services(xml, options)
-        add_payment_network_token(xml) if network_tokenization?(creditcard_or_reference)
         add_business_rules_data(xml, creditcard_or_reference, options)
+        add_airline_data(xml, options)
+        add_sales_slip_number(xml, options)
+        add_payment_network_token(xml) if network_tokenization?(creditcard_or_reference)
+        add_payment_solution(xml, creditcard_or_reference.source) if network_tokenization?(creditcard_or_reference)
+        add_tax_management_indicator(xml, options)
         add_stored_credential_subsequent_auth(xml, options)
         add_issuer_additional_data(xml, options)
         add_partner_solution_id(xml)
         add_stored_credential_options(xml, options)
         add_merchant_description(xml, options)
-        add_sales_slip_number(xml, options)
-        add_airline_data(xml, options)
         xml.target!
       end
 
@@ -347,6 +354,7 @@ module ActiveMerchant #:nodoc:
         add_purchase_data(xml, 0, false, options)
         add_tax_service(xml)
         add_business_rules_data(xml, creditcard, options)
+        add_tax_management_indicator(xml, options)
         xml.target!
       end
 
@@ -358,8 +366,9 @@ module ActiveMerchant #:nodoc:
         add_purchase_data(xml, money, true, options)
         add_other_tax(xml, options)
         add_mdd_fields(xml, options)
-        add_capture_service(xml, request_id, request_token)
+        add_capture_service(xml, request_id, request_token, options)
         add_business_rules_data(xml, authorization, options)
+        add_tax_management_indicator(xml, options)
         add_issuer_additional_data(xml, options)
         add_merchant_description(xml, options)
         add_partner_solution_id(xml)
@@ -375,18 +384,23 @@ module ActiveMerchant #:nodoc:
         add_threeds_2_ucaf_data(xml, payment_method_or_reference, options)
         add_decision_manager_fields(xml, options)
         add_mdd_fields(xml, options)
-        add_sales_slip_number(xml, options)
-        add_airline_data(xml, options)
         if (!payment_method_or_reference.is_a?(String) && card_brand(payment_method_or_reference) == 'check') || reference_is_a_check?(payment_method_or_reference)
           add_check_service(xml)
+          add_airline_data(xml, options)
+          add_sales_slip_number(xml, options)
+          add_tax_management_indicator(xml, options)
           add_issuer_additional_data(xml, options)
           add_partner_solution_id(xml)
           options[:payment_method] = :check
         else
           add_purchase_service(xml, payment_method_or_reference, options)
           add_threeds_services(xml, options)
-          add_payment_network_token(xml) if network_tokenization?(payment_method_or_reference)
           add_business_rules_data(xml, payment_method_or_reference, options)
+          add_airline_data(xml, options)
+          add_sales_slip_number(xml, options)
+          add_payment_network_token(xml) if network_tokenization?(payment_method_or_reference)
+          add_payment_solution(xml, payment_method_or_reference.source) if network_tokenization?(payment_method_or_reference)
+          add_tax_management_indicator(xml, options)
           add_stored_credential_subsequent_auth(xml, options)
           add_issuer_additional_data(xml, options)
           add_partner_solution_id(xml)
@@ -478,6 +492,7 @@ module ActiveMerchant #:nodoc:
         end
         add_subscription_create_service(xml, options)
         add_business_rules_data(xml, payment_method, options)
+        add_tax_management_indicator(xml, options)
         xml.target!
       end
 
@@ -490,6 +505,7 @@ module ActiveMerchant #:nodoc:
         add_subscription(xml, options, reference)
         add_subscription_update_service(xml, options)
         add_business_rules_data(xml, creditcard, options)
+        add_tax_management_indicator(xml, options)
         xml.target!
       end
 
@@ -510,11 +526,9 @@ module ActiveMerchant #:nodoc:
       def add_business_rules_data(xml, payment_method, options)
         prioritized_options = [options, @options]
 
-        unless network_tokenization?(payment_method)
-          xml.tag! 'businessRules' do
-            xml.tag!('ignoreAVSResult', 'true') if extract_option(prioritized_options, :ignore_avs).to_s == 'true'
-            xml.tag!('ignoreCVResult', 'true') if extract_option(prioritized_options, :ignore_cvv).to_s == 'true'
-          end
+        xml.tag! 'businessRules' do
+          xml.tag!('ignoreAVSResult', 'true') if extract_option(prioritized_options, :ignore_avs).to_s == 'true'
+          xml.tag!('ignoreCVResult', 'true') if extract_option(prioritized_options, :ignore_cvv).to_s == 'true'
         end
       end
 
@@ -552,12 +566,14 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_merchant_descriptor(xml, options)
-        return unless options[:merchant_descriptor] || options[:user_po] || options[:taxable]
+        return unless options[:merchant_descriptor] || options[:user_po] || options[:taxable] || options[:reference_data_code] || options[:invoice_number]
 
         xml.tag! 'invoiceHeader' do
           xml.tag! 'merchantDescriptor', options[:merchant_descriptor] if options[:merchant_descriptor]
           xml.tag! 'userPO', options[:user_po] if options[:user_po]
           xml.tag! 'taxable', options[:taxable] if options[:taxable]
+          xml.tag! 'referenceDataCode', options[:reference_data_code] if options[:reference_data_code]
+          xml.tag! 'invoiceNumber', options[:invoice_number] if options[:invoice_number]
         end
       end
 
@@ -591,10 +607,20 @@ module ActiveMerchant #:nodoc:
         end
       end
 
+      def add_tax_management_indicator(xml, options)
+        return unless options[:tax_management_indicator]
+
+        xml.tag! 'taxManagementIndicator', options[:tax_management_indicator] if options[:tax_management_indicator]
+      end
+
       def add_purchase_data(xml, money = 0, include_grand_total = false, options = {})
         xml.tag! 'purchaseTotals' do
           xml.tag! 'currency', options[:currency] || currency(money)
+          xml.tag!('discountManagementIndicator', options[:discount_management_indicator]) if options[:discount_management_indicator]
+          xml.tag!('taxAmount', options[:purchase_tax_amount]) if options[:purchase_tax_amount]
           xml.tag!('grandTotalAmount', localized_amount(money.to_i, options[:currency] || default_currency)) if include_grand_total
+          xml.tag!('originalAmount', options[:original_amount]) if options[:original_amount]
+          xml.tag!('invoiceAmount', options[:invoice_amount]) if options[:invoice_amount]
         end
       end
 
@@ -651,6 +677,12 @@ module ActiveMerchant #:nodoc:
         end
       end
 
+      def add_payment_solution(xml, source)
+        return unless (payment_solution = @@payment_solution[source])
+
+        xml.tag! 'paymentSolution', payment_solution
+      end
+
       def add_issuer_additional_data(xml, options)
         return unless options[:issuer_additional_data]
 
@@ -663,6 +695,7 @@ module ActiveMerchant #:nodoc:
         return unless options[:local_tax_amount] || options[:national_tax_amount] || options[:national_tax_indicator]
 
         xml.tag! 'otherTax' do
+          xml.tag! 'vatTaxRate', options[:vat_tax_rate] if options[:vat_tax_rate]
           xml.tag! 'localTaxAmount', options[:local_tax_amount] if options[:local_tax_amount]
           xml.tag! 'nationalTaxAmount', options[:national_tax_amount] if options[:national_tax_amount]
           xml.tag! 'nationalTaxIndicator', options[:national_tax_indicator] if options[:national_tax_indicator]
@@ -683,8 +716,8 @@ module ActiveMerchant #:nodoc:
       def add_check(xml, check, options)
         xml.tag! 'check' do
           xml.tag! 'accountNumber', check.account_number
-          xml.tag! 'accountType', check.account_type[0]
-          xml.tag! 'bankTransitNumber', check.routing_number
+          xml.tag! 'accountType', check.account_type == 'checking' ? 'C' : 'S'
+          xml.tag! 'bankTransitNumber', format_routing_number(check.routing_number, options)
           xml.tag! 'secCode', options[:sec_code] if options[:sec_code]
         end
       end
@@ -708,6 +741,7 @@ module ActiveMerchant #:nodoc:
               xml.tag!('commerceIndicator', indicator) if indicator
             end
             xml.tag!('reconciliationID', options[:reconciliation_id]) if options[:reconciliation_id]
+            xml.tag!('mobileRemotePaymentType', options[:mobile_remote_payment_type]) if options[:mobile_remote_payment_type]
           end
         end
       end
@@ -814,10 +848,11 @@ module ActiveMerchant #:nodoc:
         end
       end
 
-      def add_capture_service(xml, request_id, request_token)
+      def add_capture_service(xml, request_id, request_token, options)
         xml.tag! 'ccCaptureService', { 'run' => 'true' } do
           xml.tag! 'authRequestID', request_id
           xml.tag! 'authRequestToken', request_token
+          xml.tag! 'gratuityAmount', options[:gratuity_amount] if options[:gratuity_amount]
           xml.tag! 'reconciliationID', options[:reconciliation_id] if options[:reconciliation_id]
         end
       end
@@ -929,12 +964,15 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_installments(xml, options)
-        return unless options[:installment_total_count]
+        return unless %i[installment_total_count installment_total_amount installment_plan_type first_installment_date installment_annual_interest_rate installment_grace_period_duration].any? { |gsf| options.include?(gsf) }
 
         xml.tag! 'installment' do
-          xml.tag! 'totalCount', options[:installment_total_count]
+          xml.tag!('totalCount', options[:installment_total_count]) if options[:installment_total_count]
+          xml.tag!('totalAmount', options[:installment_total_amount]) if options[:installment_total_amount]
           xml.tag!('planType', options[:installment_plan_type]) if options[:installment_plan_type]
           xml.tag!('firstInstallmentDate', options[:first_installment_date]) if options[:first_installment_date]
+          xml.tag!('annualInterestRate', options[:installment_annual_interest_rate]) if options[:installment_annual_interest_rate]
+          xml.tag!('gracePeriodDuration', options[:installment_grace_period_duration]) if options[:installment_grace_period_duration]
         end
       end
 
@@ -1028,12 +1066,22 @@ module ActiveMerchant #:nodoc:
         message = message_from(response)
         authorization = success || in_fraud_review?(response) ? authorization_from(response, action, amount, options) : nil
 
+        message = auto_void?(authorization_from(response, action, amount, options), response, message, options)
+
         Response.new(success, message, response,
           test: test?,
           authorization: authorization,
           fraud_review: in_fraud_review?(response),
           avs_result: { code: response[:avsCode] },
           cvv_result: response[:cvCode])
+      end
+
+      def auto_void?(authorization, response, message, options = {})
+        return message unless response[:reasonCode] == '230' && options[:auto_void_230]
+
+        response = void(authorization, options)
+        response&.success? ? message += ' - transaction has been auto-voided.' : message += ' - transaction could not be auto-voided.'
+        message
       end
 
       # Parse the SOAP response
@@ -1103,6 +1151,10 @@ module ActiveMerchant #:nodoc:
 
       def eligible_for_zero_auth?(payment_method, options = {})
         payment_method.is_a?(CreditCard) && options[:zero_amount_auth]
+      end
+
+      def format_routing_number(routing_number, options)
+        options[:currency] == 'CAD' && routing_number.length > 8 ? routing_number[-8..-1] : routing_number
       end
     end
   end

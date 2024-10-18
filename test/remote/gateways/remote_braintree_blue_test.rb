@@ -201,6 +201,15 @@ class RemoteBraintreeBlueTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_successful_purchase_with_paypal_options
+    options = @options.merge(
+      paypal_custom_field: 'abc',
+      paypal_description: 'shoes'
+    )
+    assert response = @gateway.purchase(@amount, @credit_card, options)
+    assert_success response
+  end
+
   # Follow instructions found at https://developer.paypal.com/braintree/articles/guides/payment-methods/venmo#multiple-profiles
   # for sandbox control panel https://sandbox.braintreegateway.com/login to create a venmo profile.
   # Insert your Profile Id into fixtures.
@@ -482,6 +491,15 @@ class RemoteBraintreeBlueTest < Test::Unit::TestCase
     assert_equal '(555)555-5555', transaction['customer_details']['phone']
   end
 
+  def test_successful_purchase_with_phone_number_from_address
+    @options[:billing_address][:phone] = nil
+    @options[:billing_address][:phone_number] = '9191231234'
+    assert response = @gateway.purchase(@amount, @credit_card, @options)
+    assert_success response
+    transaction = response.params['braintree_transaction']
+    assert_equal '9191231234', transaction['customer_details']['phone']
+  end
+
   def test_successful_purchase_with_skip_advanced_fraud_checking_option
     assert response = @gateway.purchase(@amount, @credit_card, @options.merge(skip_advanced_fraud_checking: true))
     assert_success response
@@ -632,7 +650,13 @@ class RemoteBraintreeBlueTest < Test::Unit::TestCase
     assert response = @gateway.purchase(@amount, credit_card('51051051051051000'))
     assert_failure response
     assert_match %r{Credit card number is invalid\. \(81715\)}, response.message
-    assert_equal({ 'processor_response_code' => '91577' }, response.params['braintree_transaction'])
+    assert_equal('91577', response.params['braintree_transaction']['processor_response_code'])
+  end
+
+  def test_unsuccessful_purchase_with_additional_processor_response
+    assert response = @gateway.purchase(204700, @credit_card)
+    assert_failure response
+    assert_equal('2047 : Call Issuer. Pick Up Card.', response.params['braintree_transaction']['additional_processor_response'])
   end
 
   def test_authorize_and_capture
@@ -733,7 +757,7 @@ class RemoteBraintreeBlueTest < Test::Unit::TestCase
     assert failed_void = @gateway.void(auth.authorization)
     assert_failure failed_void
     assert_match('Transaction can only be voided if status is authorized', failed_void.message)
-    assert_equal({ 'processor_response_code' => '91504' }, failed_void.params['braintree_transaction'])
+    assert_equal('91504', failed_void.params['braintree_transaction']['processor_response_code'])
   end
 
   def test_failed_capture_with_invalid_transaction_id
@@ -1174,6 +1198,13 @@ class RemoteBraintreeBlueTest < Test::Unit::TestCase
     assert response = @gateway.purchase(120, payment_method_token, @options.merge(payment_method_token: true))
     assert_success response
     assert_equal '4002 Settlement Pending', response.message
+  end
+
+  def test_successful_purchase_with_processor_authorization_code
+    assert response = @gateway.purchase(@amount, @credit_card)
+    assert_success response
+    assert_equal '1000 Approved', response.message
+    assert_not_nil response.params['braintree_transaction']['processor_authorization_code']
   end
 
   def test_unsucessful_purchase_using_a_bank_account_token_not_verified

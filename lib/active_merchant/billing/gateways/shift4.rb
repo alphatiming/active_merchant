@@ -14,7 +14,7 @@ module ActiveMerchant #:nodoc:
       RECURRING_TYPE_TRANSACTIONS = %w(recurring installment)
       TRANSACTIONS_WITHOUT_RESPONSE_CODE = %w(accesstoken add)
       SUCCESS_TRANSACTION_STATUS = %w(A)
-      DISALLOWED_ENTRY_MODE_ACTIONS = %w(capture refund)
+      DISALLOWED_ENTRY_MODE_ACTIONS = %w(capture refund add verify)
       URL_POSTFIX_MAPPING = {
         'accesstoken' => 'credentials',
         'add' => 'tokens',
@@ -91,7 +91,7 @@ module ActiveMerchant #:nodoc:
         commit(action, post, options)
       end
 
-      def refund(money, authorization, options = {})
+      def refund(money, payment_method, options = {})
         post = {}
         action = 'refund'
 
@@ -99,12 +99,14 @@ module ActiveMerchant #:nodoc:
         add_invoice(post, money, options)
         add_clerk(post, options)
         add_transaction(post, options)
-        add_customer(post, authorization, options)
-        add_card(action, post, get_card_token(authorization), options)
+        card_token = payment_method.is_a?(CreditCard) ? get_card_token(payment_method) : payment_method
+        add_card(action, post, card_token, options)
         add_card_present(post, options)
 
         commit(action, post, options)
       end
+
+      alias credit refund
 
       def void(authorization, options = {})
         options[:invoice] = get_invoice(authorization)
@@ -129,7 +131,6 @@ module ActiveMerchant #:nodoc:
         action = 'add'
 
         add_datetime(post, options)
-        add_clerk(post, options)
         add_card(action, post, credit_card, options)
         add_customer(post, credit_card, options)
 
@@ -155,6 +156,8 @@ module ActiveMerchant #:nodoc:
         add_datetime(post, options)
 
         response = commit('accesstoken', post, request_headers('accesstoken', options))
+        raise OAuthResponseError.new(response, response.params.fetch('result', [{}]).first.dig('error', 'longText')) unless response.success?
+
         response.params['result'].first['credential']['accessToken']
       end
 
@@ -185,6 +188,7 @@ module ActiveMerchant #:nodoc:
         post[:transaction] = {}
         post[:transaction][:invoice] = options[:invoice] || Time.new.to_i.to_s[1..3] + rand.to_s[2..7]
         post[:transaction][:notes] = options[:notes] if options[:notes].present?
+        post[:transaction][:vendorReference] = options[:order_id]
 
         add_purchase_card(post[:transaction], options)
         add_card_on_file(post[:transaction], options)
@@ -292,7 +296,10 @@ module ActiveMerchant #:nodoc:
       def authorization_from(action, response)
         return unless success_from(action, response)
 
-        "#{response.dig('result', 0, 'card', 'token', 'value')}|#{response.dig('result', 0, 'transaction', 'invoice')}"
+        authorization = response.dig('result', 0, 'card', 'token', 'value').to_s
+        invoice = response.dig('result', 0, 'transaction', 'invoice')
+        authorization += "|#{invoice}" if invoice
+        authorization
       end
 
       def get_card_token(authorization)
@@ -305,7 +312,7 @@ module ActiveMerchant #:nodoc:
 
       def request_headers(action, options)
         headers = {
-          'Content-Type' => 'application/x-www-form-urlencoded'
+          'Content-Type' => 'application/json'
         }
         headers['AccessToken'] = @access_token
         headers['Invoice'] = options[:invoice] if action != 'capture' && options[:invoice].present?
