@@ -138,7 +138,15 @@ class BraintreeBlueTest < Test::Unit::TestCase
   end
 
   def test_zero_dollar_verification_transaction
+    @gateway = BraintreeBlueGateway.new(
+      merchant_id: 'test',
+      merchant_account_id: 'present',
+      public_key: 'test',
+      private_key: 'test'
+    )
+
     Braintree::CreditCardVerificationGateway.any_instance.expects(:create).
+      with(has_entries(options: { merchant_account_id: 'present' })).
       returns(braintree_result(cvv_response_code: 'M', avs_error_response_code: 'P'))
 
     card = credit_card('4111111111111111')
@@ -746,21 +754,34 @@ class BraintreeBlueTest < Test::Unit::TestCase
   end
 
   def test_three_d_secure_pass_thru_handling_version_2
-    Braintree::TransactionGateway.
-      any_instance.
-      expects(:sale).
-      with(has_entries(three_d_secure_pass_thru: has_entries(
-        three_d_secure_version: '2.0',
+    three_ds_expectation = {
+      three_d_secure_version: '2.0',
+      cavv: 'cavv',
+      eci_flag: 'eci',
+      ds_transaction_id: 'trans_id',
+      cavv_algorithm: 'algorithm',
+      directory_response: 'directory',
+      authentication_response: 'auth'
+    }
+
+    Braintree::TransactionGateway.any_instance.expects(:sale).with do |params|
+      (params[:sca_exemption] == 'low_value')
+      (params[:three_d_secure_pass_thru] == three_ds_expectation)
+    end.returns(braintree_result)
+
+    options = {
+      three_ds_exemption_type: 'low_value',
+      three_d_secure: {
+        version: '2.0',
         cavv: 'cavv',
-        eci_flag: 'eci',
+        eci: 'eci',
         ds_transaction_id: 'trans_id',
         cavv_algorithm: 'algorithm',
-        directory_response: 'directory',
-        authentication_response: 'auth'
-      ))).
-      returns(braintree_result)
-
-    @gateway.purchase(100, credit_card('41111111111111111111'), three_d_secure: { version: '2.0', cavv: 'cavv', eci: 'eci', ds_transaction_id: 'trans_id', cavv_algorithm: 'algorithm', directory_response_status: 'directory', authentication_response_status: 'auth' })
+        directory_response_status: 'directory',
+        authentication_response_status: 'auth'
+      }
+    }
+    @gateway.purchase(100, credit_card('41111111111111111111'), options)
   end
 
   def test_three_d_secure_pass_thru_some_fields
@@ -945,14 +966,17 @@ class BraintreeBlueTest < Test::Unit::TestCase
         (params[:industry][:data][:lodging_name] == 'Best Hotel Ever')
     end.returns(braintree_result)
 
-    @gateway.purchase(100, credit_card('41111111111111111111'),
+    @gateway.purchase(
+      100,
+      credit_card('41111111111111111111'),
       travel_data: {
         travel_package: 'flight',
         departure_date: '2050-07-22',
         lodging_check_in_date: '2050-07-22',
         lodging_check_out_date: '2050-07-25',
         lodging_name: 'Best Hotel Ever'
-      })
+      }
+    )
   end
 
   def test_successful_purchase_with_lodging_data
@@ -964,13 +988,16 @@ class BraintreeBlueTest < Test::Unit::TestCase
         (params[:industry][:data][:room_rate] == '80.00')
     end.returns(braintree_result)
 
-    @gateway.purchase(100, credit_card('41111111111111111111'),
+    @gateway.purchase(
+      100,
+      credit_card('41111111111111111111'),
       lodging_data: {
         folio_number: 'ABC123',
         check_in_date: '2050-12-22',
         check_out_date: '2050-12-25',
         room_rate: '80.00'
-      })
+      }
+    )
   end
 
   def test_apple_pay_card
@@ -993,44 +1020,13 @@ class BraintreeBlueTest < Test::Unit::TestCase
       ).
       returns(braintree_result(id: 'transaction_id'))
 
-    credit_card = network_tokenization_credit_card('4111111111111111',
+    credit_card = network_tokenization_credit_card(
+      '4111111111111111',
       brand: 'visa',
       transaction_id: '123',
       eci: '05',
-      payment_cryptogram: '111111111100cryptogram')
-
-    response = @gateway.authorize(100, credit_card, test: true, order_id: '1')
-    assert_equal 'transaction_id', response.authorization
-  end
-
-  def test_android_pay_card
-    Braintree::TransactionGateway.any_instance.expects(:sale).
-      with(
-        amount: '1.00',
-        order_id: '1',
-        customer: { id: nil, email: nil, phone: nil,
-                   first_name: 'Longbob', last_name: 'Longsen' },
-        options: { store_in_vault: false, submit_for_settlement: nil, hold_in_escrow: nil },
-        custom_fields: nil,
-        google_pay_card: {
-          number: '4111111111111111',
-          expiration_month: '09',
-          expiration_year: (Time.now.year + 1).to_s,
-          cryptogram: '111111111100cryptogram',
-          google_transaction_id: '1234567890',
-          source_card_type: 'visa',
-          source_card_last_four: '1111',
-          eci_indicator: '05'
-        }
-      ).
-      returns(braintree_result(id: 'transaction_id'))
-
-    credit_card = network_tokenization_credit_card('4111111111111111',
-      brand: 'visa',
-      eci: '05',
-      payment_cryptogram: '111111111100cryptogram',
-      source: :android_pay,
-      transaction_id: '1234567890')
+      payment_cryptogram: '111111111100cryptogram'
+    )
 
     response = @gateway.authorize(100, credit_card, test: true, order_id: '1')
     assert_equal 'transaction_id', response.authorization
@@ -1058,12 +1054,46 @@ class BraintreeBlueTest < Test::Unit::TestCase
       ).
       returns(braintree_result(id: 'transaction_id'))
 
-    credit_card = network_tokenization_credit_card('4111111111111111',
+    credit_card = network_tokenization_credit_card(
+      '4111111111111111',
       brand: 'visa',
       eci: '05',
       payment_cryptogram: '111111111100cryptogram',
       source: :google_pay,
-      transaction_id: '1234567890')
+      transaction_id: '1234567890'
+    )
+
+    response = @gateway.authorize(100, credit_card, test: true, order_id: '1')
+    assert_equal 'transaction_id', response.authorization
+  end
+
+  def test_network_token_card
+    Braintree::TransactionGateway.any_instance.expects(:sale).
+      with(
+        amount: '1.00',
+        order_id: '1',
+        customer: { id: nil, email: nil, phone: nil,
+                   first_name: 'Longbob', last_name: 'Longsen' },
+        options: { store_in_vault: false, submit_for_settlement: nil, hold_in_escrow: nil },
+        custom_fields: nil,
+        credit_card: {
+          number: '4111111111111111',
+          expiration_month: '09',
+          expiration_year: (Time.now.year + 1).to_s,
+          cardholder_name: 'Longbob Longsen',
+          network_tokenization_attributes: {
+            cryptogram: '111111111100cryptogram',
+            ecommerce_indicator: '05'
+          }
+        }
+      ).
+      returns(braintree_result(id: 'transaction_id'))
+
+    credit_card = network_tokenization_credit_card('4111111111111111',
+                                                   brand: 'visa',
+                                                   eci: '05',
+                                                   source: :network_token,
+                                                   payment_cryptogram: '111111111100cryptogram')
 
     response = @gateway.authorize(100, credit_card, test: true, order_id: '1')
     assert_equal 'transaction_id', response.authorization
@@ -1135,7 +1165,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
           external_vault: {
             status: 'will_vault'
           },
-          transaction_source: ''
+          transaction_source: 'recurring_first'
         }
       )
     ).returns(braintree_result)
@@ -1151,12 +1181,28 @@ class BraintreeBlueTest < Test::Unit::TestCase
             status: 'vaulted',
             previous_network_transaction_id: '123ABC'
           },
-          transaction_source: ''
+          transaction_source: 'recurring'
         }
       )
     ).returns(braintree_result)
 
     @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:cardholder, :recurring, id: '123ABC') })
+  end
+
+  def test_stored_credential_prefers_options_for_ntid
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'vaulted',
+            previous_network_transaction_id: '321XYZ'
+          },
+          transaction_source: 'recurring'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', network_transaction_id: '321XYZ', stored_credential: stored_credential(:cardholder, :recurring, id: '123ABC') })
   end
 
   def test_stored_credential_recurring_mit_initial
@@ -1166,7 +1212,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
           external_vault: {
             status: 'will_vault'
           },
-          transaction_source: 'recurring'
+          transaction_source: 'recurring_first'
         }
       )
     ).returns(braintree_result)
@@ -1197,7 +1243,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
           external_vault: {
             status: 'will_vault'
           },
-          transaction_source: ''
+          transaction_source: 'installment_first'
         }
       )
     ).returns(braintree_result)
@@ -1213,7 +1259,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
             status: 'vaulted',
             previous_network_transaction_id: '123ABC'
           },
-          transaction_source: ''
+          transaction_source: 'installment'
         }
       )
     ).returns(braintree_result)
@@ -1228,7 +1274,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
           external_vault: {
             status: 'will_vault'
           },
-          transaction_source: 'recurring'
+          transaction_source: 'installment_first'
         }
       )
     ).returns(braintree_result)
@@ -1244,7 +1290,7 @@ class BraintreeBlueTest < Test::Unit::TestCase
             status: 'vaulted',
             previous_network_transaction_id: '123ABC'
           },
-          transaction_source: 'recurring'
+          transaction_source: 'installment'
         }
       )
     ).returns(braintree_result)
@@ -1329,6 +1375,21 @@ class BraintreeBlueTest < Test::Unit::TestCase
     @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: { initiator: 'merchant', reason_type: 'recurring_first', initial_transaction: true } })
   end
 
+  def test_stored_credential_v2_recurring_first_cit_initial
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'will_vault'
+          },
+          transaction_source: 'recurring_first'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: { initiator: 'merchant', reason_type: 'recurring_first', initial_transaction: true } })
+  end
+
   def test_stored_credential_moto_cit_initial
     Braintree::TransactionGateway.any_instance.expects(:sale).with(
       standard_purchase_params.merge(
@@ -1344,6 +1405,98 @@ class BraintreeBlueTest < Test::Unit::TestCase
     @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: { initiator: 'merchant', reason_type: 'moto', initial_transaction: true } })
   end
 
+  def test_stored_credential_v2_recurring_first
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'will_vault'
+          },
+          transaction_source: 'recurring_first'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:cardholder, :recurring, :initial) })
+  end
+
+  def test_stored_credential_v2_follow_on_recurring_first
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'vaulted',
+            previous_network_transaction_id: '123ABC'
+          },
+          transaction_source: 'recurring'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:merchant, :recurring, id: '123ABC') })
+  end
+
+  def test_stored_credential_v2_installment_first
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'will_vault'
+          },
+          transaction_source: 'installment_first'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:cardholder, :installment, :initial) })
+  end
+
+  def test_stored_credential_v2_follow_on_installment_first
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'vaulted',
+            previous_network_transaction_id: '123ABC'
+          },
+          transaction_source: 'installment'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:merchant, :installment, id: '123ABC') })
+  end
+
+  def test_stored_credential_v2_unscheduled_cit_initial
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'will_vault'
+          },
+          transaction_source: ''
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:cardholder, :unscheduled, :initial) })
+  end
+
+  def test_stored_credential_v2_unscheduled_mit_initial
+    Braintree::TransactionGateway.any_instance.expects(:sale).with(
+      standard_purchase_params.merge(
+        {
+          external_vault: {
+            status: 'will_vault'
+          },
+          transaction_source: 'unscheduled'
+        }
+      )
+    ).returns(braintree_result)
+
+    @gateway.purchase(100, credit_card('41111111111111111111'), { test: true, order_id: '1', stored_credential: stored_credential(:merchant, :unscheduled, :initial) })
+  end
+
   def test_raises_exeption_when_adding_bank_account_to_customer_without_billing_address
     bank_account = check({ account_number: '1000000002', routing_number: '011000015' })
 
@@ -1354,6 +1507,14 @@ class BraintreeBlueTest < Test::Unit::TestCase
   def test_returns_error_on_authorize_when_passing_a_bank_account
     bank_account = check({ account_number: '1000000002', routing_number: '011000015' })
     response = @gateway.authorize(100, bank_account, {})
+
+    assert_failure response
+    assert_equal 'Direct bank account transactions are not supported. Bank accounts must be successfully stored before use.', response.message
+  end
+
+  def test_returns_error_on_general_credit_when_passing_a_bank_account
+    bank_account = check({ account_number: '1000000002', routing_number: '011000015' })
+    response = @gateway.credit(100, bank_account, {})
 
     assert_failure response
     assert_equal 'Direct bank account transactions are not supported. Bank accounts must be successfully stored before use.', response.message
@@ -1378,6 +1539,15 @@ class BraintreeBlueTest < Test::Unit::TestCase
 
   def test_scrub_sensitive_data
     assert_equal filtered_success_token_nonce, @gateway.scrub(success_create_token_nonce)
+  end
+
+  def test_setup_purchase
+    Braintree::ClientTokenGateway.any_instance.expects(:generate).with do |params|
+      (params[:merchant_account_id] == 'merchant_account_id')
+    end.returns('client_token')
+
+    response = @gateway.setup_purchase(merchant_account_id: 'merchant_account_id')
+    assert_equal 'client_token', response.params['client_token']
   end
 
   private

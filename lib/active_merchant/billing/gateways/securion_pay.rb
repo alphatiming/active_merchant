@@ -193,7 +193,8 @@ module ActiveMerchant #:nodoc:
           post[:card] = card
           add_address(post, options)
         elsif creditcard.kind_of?(String)
-          post[:card] = creditcard
+          key = creditcard.match(/^pm_/) ? :paymentMethod : :card
+          post[key] = creditcard
         else
           raise ArgumentError.new("Unhandled payment method #{creditcard.class}.")
         end
@@ -223,24 +224,37 @@ module ActiveMerchant #:nodoc:
         end
 
         response = api_request(url, parameters, options, method)
-        success = !response.key?('error')
+        success = success?(response)
 
-        Response.new(success,
+        Response.new(
+          success,
           (success ? 'Transaction approved' : response['error']['message']),
           response,
           test: test?,
-          authorization: (success ? response['id'] : response['error']['charge']),
-          error_code: (success ? nil : STANDARD_ERROR_CODE_MAPPING[response['error']['code']]))
+          authorization: authorization_from(url, response),
+          error_code: (success ? nil : STANDARD_ERROR_CODE_MAPPING[response['error']['code']])
+        )
+      end
+
+      def authorization_from(action, response)
+        if action == 'customers' && success?(response) && response['cards'].present?
+          response['cards'].first['id']
+        else
+          success?(response) ? response['id'] : (response.dig('error', 'charge') || response.dig('error', 'chargeId'))
+        end
+      end
+
+      def success?(response)
+        !response.key?('error')
       end
 
       def headers(options = {})
         secret_key = options[:secret_key] || @options[:secret_key]
 
-        headers = {
+        {
           'Authorization' => 'Basic ' + Base64.encode64(secret_key.to_s + ':').strip,
           'User-Agent' => "SecurionPay/v1 ActiveMerchantBindings/#{ActiveMerchant::VERSION}"
         }
-        headers
       end
 
       def response_error(raw_response)
@@ -287,8 +301,8 @@ module ActiveMerchant #:nodoc:
         response
       end
 
-      def json_error(raw_response)
-        msg = 'Invalid response received from the SecurionPay API.'
+      def json_error(raw_response, gateway_name = 'SecurionPay')
+        msg = "Invalid response received from the #{gateway_name} API."
         msg += "  (The raw response returned by the API was #{raw_response.inspect})"
         {
           'error' => {
@@ -298,7 +312,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def test?
-        (@options[:secret_key]&.include?('_test_'))
+        @options[:secret_key]&.include?('_test_')
       end
     end
   end

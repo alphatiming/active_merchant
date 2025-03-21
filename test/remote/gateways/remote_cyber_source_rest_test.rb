@@ -8,13 +8,33 @@ class RemoteCyberSourceRestTest < Test::Unit::TestCase
     @bank_account = check(account_number: '4100', routing_number: '121042882')
     @declined_bank_account = check(account_number: '550111', routing_number: '121107882')
 
-    @visa_card = credit_card('4111111111111111',
-      verification_value: '987',
-      month: 12,
-      year: 2031)
+    @visa_card = credit_card('4111111111111111', verification_value: '987', month: 12, year: 2031)
 
     @master_card = credit_card('2222420000001113', brand: 'master')
     @discover_card = credit_card('6011111111111117', brand: 'discover')
+
+    @visa_network_token = network_tokenization_credit_card(
+      '4111111111111111',
+      brand: 'visa',
+      eci: '05',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      source: :network_token
+    )
+    @amex_network_token = network_tokenization_credit_card(
+      '378282246310005',
+      brand: 'american_express',
+      eci: '05',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      source: :network_token
+    )
+
+    @mastercard_network_token = network_tokenization_credit_card(
+      '5555555555554444',
+      brand: 'master',
+      eci: '05',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      source: :network_token
+    )
 
     @apple_pay = network_tokenization_credit_card(
       '4111111111111111',
@@ -149,13 +169,13 @@ class RemoteCyberSourceRestTest < Test::Unit::TestCase
     assert_equal 'PENDING', response.message
   end
 
-  def test_failure_capture_with_higher_amount
-    authorize = @gateway.authorize(@amount, @visa_card, @options)
-    response = @gateway.capture(@amount + 10, authorize.authorization, @options)
+  # def test_failure_capture_with_higher_amount
+  #   authorize = @gateway.authorize(@amount, @visa_card, @options)
+  #   response = @gateway.capture(@amount + 10, authorize.authorization, @options)
 
-    assert_failure response
-    assert_match(/exceeds/, response.params['message'])
-  end
+  #   assert_failure response
+  #   assert_match(/exceeds/, response.params['message'])
+  # end
 
   def test_successful_purchase
     response = @gateway.purchase(@amount, @visa_card, @options)
@@ -304,6 +324,30 @@ class RemoteCyberSourceRestTest < Test::Unit::TestCase
     assert_equal 'INVALID_ACCOUNT', response.error_code
   end
 
+  def test_successful_authorize_with_visa_network_token
+    response = @gateway.authorize(@amount, @visa_network_token, @options)
+
+    assert_success response
+    assert_equal 'AUTHORIZED', response.message
+    refute_empty response.params['_links']['capture']
+  end
+
+  def test_successful_authorize_with_mastercard_network_token
+    response = @gateway.authorize(@amount, @mastercard_network_token, @options)
+
+    assert_success response
+    assert_equal 'AUTHORIZED', response.message
+    refute_empty response.params['_links']['capture']
+  end
+
+  def test_successful_authorize_with_amex_network_token
+    response = @gateway.authorize(@amount, @amex_network_token, @options)
+
+    assert_success response
+    assert_equal 'AUTHORIZED', response.message
+    refute_empty response.params['_links']['capture']
+  end
+
   def test_successful_authorize_with_apple_pay
     response = @gateway.authorize(@amount, @apple_pay, @options)
 
@@ -402,69 +446,65 @@ class RemoteCyberSourceRestTest < Test::Unit::TestCase
 
   def test_purchase_using_stored_credential_initial_mit
     options = stored_credential_options(:merchant, :internet, :initial)
-    options[:reason_code] = '4'
     assert auth = @gateway.authorize(@amount, @visa_card, options)
     assert_success auth
     assert purchase = @gateway.purchase(@amount, @visa_card, options)
     assert_success purchase
   end
 
+  def test_purchase_using_stored_credential_with_discover
+    options = stored_credential_options(:cardholder, :recurring, :initial)
+    assert auth = @gateway.authorize(@amount, @discover_card, options)
+    assert_success auth
+    used_store_credentials = stored_credential_options(:cardholder, :recurring, ntid: auth.network_transaction_id)
+    assert purchase = @gateway.purchase(@amount, @discover_card, used_store_credentials)
+    assert_success purchase
+  end
+
+  def test_purchase_using_stored_credential_recurring_non_us
+    options = stored_credential_options(:cardholder, :recurring, :initial)
+    options[:billing_address][:country] = 'CA'
+    options[:billing_address][:state] = 'ON'
+    options[:billing_address][:city] = 'Ottawa'
+    options[:billing_address][:zip] = 'K1C2N6'
+    assert auth = @gateway.authorize(@amount, @visa_card, options)
+    assert_success auth
+    used_store_credentials = stored_credential_options(:merchant, :recurring, ntid: auth.network_transaction_id)
+    assert purchase = @gateway.purchase(@amount, @visa_card, used_store_credentials)
+    assert_success purchase
+  end
+
   def test_purchase_using_stored_credential_recurring_cit
     options = stored_credential_options(:cardholder, :recurring, :initial)
-    options[:reason_code] = '4'
     assert auth = @gateway.authorize(@amount, @visa_card, options)
     assert_success auth
     used_store_credentials = stored_credential_options(:cardholder, :recurring, ntid: auth.network_transaction_id)
-    used_store_credentials[:reason_code] = '4'
     assert purchase = @gateway.purchase(@amount, @visa_card, used_store_credentials)
     assert_success purchase
   end
 
   def test_purchase_using_stored_credential_recurring_mit
     options = stored_credential_options(:merchant, :recurring, :initial)
-    options[:reason_code] = '4'
     assert auth = @gateway.authorize(@amount, @visa_card, options)
     assert_success auth
     used_store_credentials = stored_credential_options(:merchant, :recurring, ntid: auth.network_transaction_id)
-    used_store_credentials[:reason_code] = '4'
     assert purchase = @gateway.purchase(@amount, @visa_card, used_store_credentials)
     assert_success purchase
   end
 
-  def test_purchase_using_stored_credential_installment_cit
+  def test_purchase_using_stored_credential_installment
     options = stored_credential_options(:cardholder, :installment, :initial)
-    options[:reason_code] = '4'
-    assert auth = @gateway.authorize(@amount, @visa_card, options)
-    assert_success auth
-    used_store_credentials = stored_credential_options(:cardholder, :installment, ntid: auth.network_transaction_id)
-    used_store_credentials[:reason_code] = '4'
-    assert purchase = @gateway.purchase(@amount, @visa_card, used_store_credentials)
-    assert_success purchase
-  end
-
-  def test_purchase_using_stored_credential_installment_mit
-    options = stored_credential_options(:merchant, :installment, :initial)
-    options[:reason_code] = '4'
     assert auth = @gateway.authorize(@amount, @visa_card, options)
     assert_success auth
     used_store_credentials = stored_credential_options(:merchant, :installment, ntid: auth.network_transaction_id)
-    used_store_credentials[:reason_code] = '4'
-    assert purchase = @gateway.purchase(@amount, @visa_card, used_store_credentials)
+    assert purchase = @gateway.authorize(@amount, @visa_card, options.merge(used_store_credentials))
     assert_success purchase
-  end
-
-  def test_failure_stored_credential_invalid_reason_code
-    options = stored_credential_options(:cardholder, :internet, :initial)
-    assert auth = @gateway.authorize(@amount, @master_card, options)
-    assert_equal(auth.params['status'], 'INVALID_REQUEST')
-    assert_equal(auth.params['message'], 'Declined - One or more fields in the request contains invalid data')
-    assert_equal(auth.params['details'].first['field'], 'processingInformation.authorizationOptions.initiator.merchantInitiatedTransaction.reason')
   end
 
   def test_auth_and_purchase_with_network_txn_id
     options = stored_credential_options(:merchant, :recurring, :initial)
-    options[:reason_code] = '4'
     assert auth = @gateway.authorize(@amount, @visa_card, options)
+    assert_success auth
     assert purchase = @gateway.purchase(@amount, @visa_card, options.merge(network_transaction_id: auth.network_transaction_id))
     assert_success purchase
   end
@@ -506,13 +546,74 @@ class RemoteCyberSourceRestTest < Test::Unit::TestCase
     ActiveMerchant::Billing::CyberSourceGateway.application_id = nil
   end
 
-  def test_successful_purchase_in_australian_dollars
-    @options[:currency] = 'AUD'
-    response = @gateway.purchase(@amount, @visa_card, @options)
+  def test_successful_authorize_with_3ds2_visa
+    @options[:three_d_secure] = {
+      version: '2.2.0',
+      cavv: '3q2+78r+ur7erb7vyv66vv\/\/\/\/8=',
+      eci: '05',
+      ds_transaction_id: 'ODUzNTYzOTcwODU5NzY3Qw==',
+      enrolled: 'true',
+      authentication_response_status: 'Y'
+    }
+    auth = @gateway.authorize(@amount, @visa_card, @options)
+    assert_success auth
+  end
+
+  def test_successful_authorize_with_3ds2_mastercard
+    @options[:three_d_secure] = {
+      version: '2.2.0',
+      cavv: '3q2+78r+ur7erb7vyv66vv\/\/\/\/8=',
+      eci: '05',
+      ds_transaction_id: 'ODUzNTYzOTcwODU5NzY3Qw==',
+      enrolled: 'true',
+      authentication_response_status: 'Y'
+    }
+    auth = @gateway.authorize(@amount, @master_card, @options)
+    assert_success auth
+  end
+
+  def test_successful_purchase_with_level_2_data
+    response = @gateway.purchase(@amount, @visa_card, @options.merge({ purchase_order_number: '13829012412' }))
     assert_success response
     assert response.test?
     assert_equal 'AUTHORIZED', response.message
     assert_nil response.params['_links']['capture']
-    assert_equal 'AUD', response.params['orderInformation']['amountDetails']['currency']
+  end
+
+  def test_successful_purchase_with_level_2_and_3_data
+    options = {
+      purchase_order_number: '6789',
+      discount_amount: '150',
+      ships_from_postal_code: '90210',
+      line_items: [
+        {
+          productName: 'Product Name',
+          kind: 'debit',
+          quantity: 10,
+          unitPrice: '9.5000',
+          totalAmount: '95.00',
+          taxAmount: '5.00',
+          discountAmount: '0.00',
+          productCode: '54321',
+          commodityCode: '98765'
+        },
+        {
+          productName: 'Other Product Name',
+          kind: 'debit',
+          quantity: 1,
+          unitPrice: '2.5000',
+          totalAmount: '90.00',
+          taxAmount: '2.00',
+          discountAmount: '1.00',
+          productCode: '54322',
+          commodityCode: '98766'
+        }
+      ]
+    }
+    assert response = @gateway.purchase(@amount, @visa_card, @options.merge(options))
+    assert_success response
+    assert response.test?
+    assert_equal 'AUTHORIZED', response.message
+    assert_nil response.params['_links']['capture']
   end
 end

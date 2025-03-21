@@ -316,7 +316,7 @@ module ActiveMerchant #:nodoc:
       def strip_line_breaks(address)
         return unless address.is_a?(Hash)
 
-        Hash[address.map { |k, s| [k, s&.tr("\r\n", ' ')&.strip] }]
+        address.map { |k, s| [k, s&.tr("\r\n", ' ')&.strip] }.to_h
       end
 
       def add_invoice(xml, options)
@@ -380,12 +380,16 @@ module ActiveMerchant #:nodoc:
           response = parse_error(e.response)
         end
 
-        Response.new(successful?(response), message_from(response), response,
+        Response.new(
+          successful?(response),
+          message_from(response),
+          response,
           test: test?,
           authorization: successful?(response) ? response_authorization(action, response, credit_card) : '',
           avs_result: { code: response[:avs] },
           cvv_result: response[:cvv2],
-          error_code: standard_error_code(response))
+          error_code: standard_error_code(response)
+        )
       end
 
       def headers(method, url, request)

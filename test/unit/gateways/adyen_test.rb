@@ -12,52 +12,64 @@ class AdyenTest < Test::Unit::TestCase
 
     @bank_account = check()
 
-    @credit_card = credit_card('4111111111111111',
+    @credit_card = credit_card(
+      '4111111111111111',
       month: 8,
       year: 2018,
       first_name: 'Test',
       last_name: 'Card',
       verification_value: '737',
-      brand: 'visa')
+      brand: 'visa'
+    )
 
-    @elo_credit_card = credit_card('5066 9911 1111 1118',
+    @elo_credit_card = credit_card(
+      '5066 9911 1111 1118',
       month: 10,
       year: 2020,
       first_name: 'John',
       last_name: 'Smith',
       verification_value: '737',
-      brand: 'elo')
+      brand: 'elo'
+    )
 
-    @cabal_credit_card = credit_card('6035 2277 1642 7021',
+    @cabal_credit_card = credit_card(
+      '6035 2277 1642 7021',
       month: 10,
       year: 2020,
       first_name: 'John',
       last_name: 'Smith',
       verification_value: '737',
-      brand: 'cabal')
+      brand: 'cabal'
+    )
 
-    @unionpay_credit_card = credit_card('8171 9999 0000 0000 021',
+    @unionpay_credit_card = credit_card(
+      '8171 9999 0000 0000 021',
       month: 10,
       year: 2030,
       first_name: 'John',
       last_name: 'Smith',
       verification_value: '737',
-      brand: 'unionpay')
+      brand: 'unionpay'
+    )
 
     @three_ds_enrolled_card = credit_card('4212345678901237', brand: :visa)
 
-    @apple_pay_card = network_tokenization_credit_card('4111111111111111',
+    @apple_pay_card = network_tokenization_credit_card(
+      '4111111111111111',
       payment_cryptogram: 'YwAAAAAABaYcCMX/OhNRQAAAAAA=',
       month: '08',
       year: '2018',
       source: :apple_pay,
-      verification_value: nil)
+      verification_value: nil
+    )
 
-    @nt_credit_card = network_tokenization_credit_card('4895370015293175',
+    @nt_credit_card = network_tokenization_credit_card(
+      '4895370015293175',
       brand: 'visa',
       eci: '07',
       source: :network_token,
-      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=')
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk='
+    )
 
     @amount = 100
 
@@ -168,10 +180,18 @@ class AdyenTest < Test::Unit::TestCase
     assert_match 'Received unexpected 3DS authentication response, but a 3DS initiation flag was not included in the request.', response.message
   end
 
+  def test_failed_authorize_with_unexpected_3ds_with_flag_ignore_threed_dynamic
+    @gateway.expects(:ssl_post).returns(successful_authorize_with_3ds_response)
+    response = @gateway.authorize(@amount, @three_ds_enrolled_card, @options.merge!(threed_dynamic: true, ignore_threed_dynamic: true))
+    assert_failure response
+    assert_match 'Received unexpected 3DS authentication response, but a 3DS initiation flag was not included in the request.', response.message
+  end
+
   def test_successful_authorize_with_recurring_contract_type
     stub_comms do
       @gateway.authorize(100, @credit_card, @options.merge({ recurring_contract_type: 'ONECLICK' }))
     end.check_request do |_endpoint, data, _headers|
+      assert_equal 'john.smith@test.com', JSON.parse(data)['shopperEmail']
       assert_equal 'ONECLICK', JSON.parse(data)['recurring']['contract']
     end.respond_with(successful_authorize_response)
   end
@@ -240,6 +260,16 @@ class AdyenTest < Test::Unit::TestCase
     response = @gateway.authorize(@amount, @credit_card, @options)
     assert_equal 'Expired Card', response.message
     assert_failure response
+  end
+
+  def test_failure_authorize_with_transient_error
+    @gateway.instance_variable_set(:@response_headers, { 'transient-error' => 'error_will_robinson' })
+    @gateway.expects(:ssl_post).returns(failed_authorize_response)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert response.params['response_headers']['transient_error'], 'error_will_robinson'
+    assert response.test?
   end
 
   def test_standard_error_code_mapping
@@ -330,6 +360,16 @@ class AdyenTest < Test::Unit::TestCase
     response = @gateway.send(:commit, 'authorise', {}, {})
 
     assert_equal 'Refused | 01: Refer to card issuer', response.message
+    assert_equal '01', response.error_code
+    assert_failure response
+  end
+
+  def test_failed_fraud_raw_refusal
+    @gateway.expects(:ssl_post).returns(failed_fraud_visa_response)
+
+    response = @gateway.send(:commit, 'authorise', {}, {})
+
+    assert_equal 'N7', response.error_code
     assert_failure response
   end
 
@@ -339,6 +379,16 @@ class AdyenTest < Test::Unit::TestCase
     response = @gateway.send(:commit, 'authorise', {}, {})
 
     assert_equal 'Refused | 01 : New account information available', response.message
+    assert_equal '01', response.error_code
+    assert_failure response
+  end
+
+  def test_failed_authorise_mastercard_raw_error_message
+    @gateway.expects(:ssl_post).returns(failed_authorize_mastercard_response)
+
+    response = @gateway.send(:commit, 'authorise', {}, { raw_error_message: true })
+
+    assert_equal 'Refused | 01: Refer to card issuer', response.message
     assert_failure response
   end
 
@@ -775,6 +825,29 @@ class AdyenTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_successful_payout_with_credit_card
+    payout_options = {
+      reference: 'P9999999999999999',
+      email: 'john.smith@test.com',
+      ip: '77.110.174.153',
+      shopper_reference: 'John Smith',
+      billing_address: @us_address,
+      nationality: 'NL',
+      order_id: 'P9999999999999999',
+      date_of_birth: '1990-01-01',
+      payout: true
+    }
+
+    stub_comms do
+      @gateway.credit(2500, @credit_card, payout_options)
+    end.check_request do |endpoint, data, _headers|
+      assert_match(/payout/, endpoint)
+      assert_match(/"dateOfBirth\":\"1990-01-01\"/, data)
+      assert_match(/"nationality\":\"NL\"/, data)
+      assert_match(/"shopperName\":{\"firstName\":\"Test\",\"lastName\":\"Card\"}/, data)
+    end.respond_with(successful_payout_response)
+  end
+
   def test_successful_void
     @gateway.expects(:ssl_post).returns(successful_void_response)
     response = @gateway.void('7914775043909934')
@@ -960,6 +1033,23 @@ class AdyenTest < Test::Unit::TestCase
     response = @gateway.authorize(@amount, @credit_card, @options)
     assert_failure response
     assert_equal 'Refused | 05 : Do not honor', response.message
+    assert_equal '05', response.error_code
+  end
+
+  def test_failed_without_refusal_reason_raw
+    @gateway.expects(:ssl_post).returns(failed_without_raw_refusal_reason)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal 'Your money is no good here', response.error_code
+  end
+
+  def test_failed_without_refusal_reason
+    @gateway.expects(:ssl_post).returns(failed_without_refusal_reason)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_nil response.error_code
   end
 
   def test_scrub
@@ -979,14 +1069,16 @@ class AdyenTest < Test::Unit::TestCase
 
   def test_shopper_data
     post = { card: { billingAddress: {} } }
-    @gateway.send(:add_shopper_data, post, @options)
+    @gateway.send(:add_shopper_data, post, @credit_card, @options)
+    @gateway.send(:add_extra_data, post, @credit_card, @options)
     assert_equal 'john.smith@test.com', post[:shopperEmail]
     assert_equal '77.110.174.153', post[:shopperIP]
   end
 
   def test_shopper_data_backwards_compatibility
     post = { card: { billingAddress: {} } }
-    @gateway.send(:add_shopper_data, post, @options_shopper_data)
+    @gateway.send(:add_shopper_data, post, @credit_card, @options_shopper_data)
+    @gateway.send(:add_extra_data, post, @credit_card, @options_shopper_data)
     assert_equal 'john2.smith@test.com', post[:shopperEmail]
     assert_equal '192.168.100.100', post[:shopperIP]
   end
@@ -1012,6 +1104,52 @@ class AdyenTest < Test::Unit::TestCase
     assert_equal @options[:shipping_address][:zip], post[:deliveryAddress][:postalCode]
     assert_equal @options[:shipping_address][:city], post[:deliveryAddress][:city]
     assert_equal @options[:shipping_address][:country], post[:deliveryAddress][:country]
+  end
+
+  def test_default_billing_address_country
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge({
+        billing_address: {
+          address1: 'Infinite Loop',
+          address2: 1,
+          country: '',
+          city: 'Cupertino',
+          state: 'CA',
+          zip: '95014'
+        }
+      }))
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/"country":"ZZ"/, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
+  def test_default_shipping_address_country
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge({
+        shipping_address: {
+          address1: 'Infinite Loop',
+          address2: 1,
+          country: '',
+          city: 'Cupertino',
+          state: 'CA',
+          zip: '95014'
+        }
+      }))
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/"country":"ZZ"/, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
+  def test_address_override_that_will_swap_housenumberorname_and_street
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(address_override: true))
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/"houseNumberOrName":"456 My Street"/, data)
+      assert_match(/"street":"Apt 1"/, data)
+    end.respond_with(successful_authorize_response)
+    assert_success response
   end
 
   def test_successful_auth_phone
@@ -1414,6 +1552,16 @@ class AdyenTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_additional_extra_data
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(store: 'test store', mcc: '1234'))
+    end.check_request do |_endpoint, data, _headers|
+      assert_equal JSON.parse(data)['store'], 'test store'
+      assert_equal JSON.parse(data)['mcc'], '1234'
+    end.respond_with(successful_authorize_response)
+    assert_success response
+  end
+
   def test_extended_avs_response
     response = stub_comms do
       @gateway.verify(@credit_card, @options)
@@ -1437,6 +1585,26 @@ class AdyenTest < Test::Unit::TestCase
     end.check_request(skip_response: true) do |_endpoint, data|
       assert_match(/"amount\":{\"value\":\"1000\",\"currency\":\"JOD\"}/, data)
     end
+  end
+
+  def test_metadata_sent_through_in_authorize
+    metadata = {
+      field_one: 'A',
+      field_two: 'B',
+      field_three: 'C',
+      field_four: 'EASY AS ONE TWO THREE'
+    }
+
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge(metadata: metadata))
+    end.check_request do |_endpoint, data, _headers|
+      parsed = JSON.parse(data)
+      assert_equal parsed['metadata']['field_one'], metadata[:field_one]
+      assert_equal parsed['metadata']['field_two'], metadata[:field_two]
+      assert_equal parsed['metadata']['field_three'], metadata[:field_three]
+      assert_equal parsed['metadata']['field_four'], metadata[:field_four]
+    end.respond_with(successful_authorize_response)
+    assert_success response
   end
 
   private
@@ -1769,6 +1937,48 @@ class AdyenTest < Test::Unit::TestCase
     RESPONSE
   end
 
+  def failed_fraud_visa_response
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "refusalReasonRaw": "N7 : FRAUD"
+       },
+       "refusalReason": "Refused",
+       "pspReference":"8514775559925128",
+       "resultCode":"Refused"
+     }
+    RESPONSE
+  end
+
+  def failed_without_raw_refusal_reason
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "refusalReasonRaw": null
+       },
+       "refusalReason": "Your money is no good here",
+       "pspReference":"8514775559925128",
+       "resultCode":"Refused"
+     }
+    RESPONSE
+  end
+
+  def failed_without_refusal_reason
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "refusalReasonRaw": null
+       },
+       "refusalReason": null,
+       "pspReference":"8514775559925128",
+       "resultCode":"Refused"
+     }
+    RESPONSE
+  end
+
   def failed_authorize_mastercard_response
     <<-RESPONSE
     {
@@ -1829,6 +2039,31 @@ class AdyenTest < Test::Unit::TestCase
     {
       "pspReference": "883614109029400G",
       "resultCode": "Received"
+    }
+    RESPONSE
+  end
+
+  def successful_payout_response
+    <<-RESPONSE
+    {
+      "additionalData":
+      {
+        "liabilityShift": "false",
+        "authCode": "081439",
+        "avsResult": "0 Unknown",
+        "retry.attempt1.acquirerAccount": "TestPmmAcquirerAccount",
+        "threeDOffered": "false",
+        "retry.attempt1.acquirer": "TestPmmAcquirer",
+        "authorisationMid": "50",
+        "acquirerAccountCode": "TestPmmAcquirerAccount",
+        "cvcResult": "0 Unknown",
+        "retry.attempt1.responseCode": "Approved",
+        "threeDAuthenticated": "false",
+        "retry.attempt1.rawResponse": "AUTHORISED"
+      },
+      "pspReference": "GMTN2VTQGJHKGK82",
+      "resultCode": "Authorised",
+      "authCode": "081439"
     }
     RESPONSE
   end

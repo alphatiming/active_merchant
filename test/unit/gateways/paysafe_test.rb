@@ -243,6 +243,47 @@ class PaysafeTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_merchant_ref_num_and_order_id
+    options = @options.merge({ order_id: '12345678' })
+    response = stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, options)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/"merchantRefNum":"12345678"/, data)
+    end.respond_with(successful_purchase_response)
+
+    assert_success response
+
+    options = @options.merge({ order_id: '12345678', merchant_ref_num: '87654321' })
+    response = stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, options)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/"merchantRefNum":"87654321"/, data)
+    end.respond_with(successful_purchase_response)
+
+    assert_success response
+  end
+
+  def test_truncate_long_address_fields
+    options = {
+      billing_address: {
+        address1: "This is an extremely long address, it is unreasonably long and we can't allow it.",
+        address2: "This is an extremely long address2, it is unreasonably long and we can't allow it.",
+        city: 'Lake Chargoggagoggmanchauggagoggchaubunagungamaugg',
+        state: 'NC',
+        zip: '27701'
+      }
+    }
+    response = stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, options)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/"street":"This is an extremely long address, it is unreasona"/, data)
+      assert_match(/"street2":"This is an extremely long address2, it is unreason"/, data)
+      assert_match(/"city":"Lake Chargoggagoggmanchauggagoggchaubuna"/, data)
+    end.respond_with(successful_purchase_response)
+
+    assert_success response
+  end
+
   def test_scrub
     assert @gateway.supports_scrubbing?
     assert_equal @gateway.scrub(pre_scrubbed), post_scrubbed

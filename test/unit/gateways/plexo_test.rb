@@ -9,6 +9,15 @@ class PlexoTest < Test::Unit::TestCase
     @amount = 100
     @credit_card = credit_card('5555555555554444', month: '12', year: '2024', verification_value: '111', first_name: 'Santiago', last_name: 'Navatta')
     @declined_card = credit_card('5555555555554445')
+    @network_token_credit_card = ActiveMerchant::Billing::NetworkTokenizationCreditCard.new({
+      first_name: 'Santiago', last_name: 'Navatta',
+      brand: 'Mastercard',
+      payment_cryptogram: 'UnVBR0RlYm42S2UzYWJKeWJBdWQ=',
+      number: '5555555555554444',
+      source: :network_token,
+      month: '12',
+      year: 2020
+    })
     @options = {
       email: 'snavatta@plexo.com.uy',
       ip: '127.0.0.1',
@@ -116,6 +125,24 @@ class PlexoTest < Test::Unit::TestCase
     end.check_request do |_endpoint, data, _headers|
       request = JSON.parse(data)
       assert_equal request['BrowserDetails']['DeviceFingerprint'], 'USABJHABSFASNJKN123532'
+    end.respond_with(successful_authorize_response)
+  end
+
+  def test_successful_authorize_with_invoice_number
+    stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge({ invoice_number: '12345abcde' }))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal request['InvoiceNumber'], '12345abcde'
+    end.respond_with(successful_authorize_response)
+  end
+
+  def test_successful_authorize_with_merchant_id
+    stub_comms do
+      @gateway.authorize(@amount, @credit_card, @options.merge({ merchant_id: 1234 }))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal request['MerchantId'], 1234
     end.respond_with(successful_authorize_response)
   end
 
@@ -280,6 +307,24 @@ class PlexoTest < Test::Unit::TestCase
     end.respond_with(successful_verify_response)
   end
 
+  def test_successful_verify_with_invoice_number
+    stub_comms do
+      @gateway.verify(@credit_card, @options.merge({ invoice_number: '12345abcde' }))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal request['InvoiceNumber'], '12345abcde'
+    end.respond_with(successful_verify_response)
+  end
+
+  def test_successful_verify_with_merchant_id
+    stub_comms do
+      @gateway.verify(@credit_card, @options.merge({ merchant_id: 1234 }))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal request['MerchantId'], 1234
+    end.respond_with(successful_verify_response)
+  end
+
   def test_failed_verify
     @gateway.expects(:ssl_post).returns(failed_verify_response)
 
@@ -291,6 +336,23 @@ class PlexoTest < Test::Unit::TestCase
   def test_scrub
     assert @gateway.supports_scrubbing?
     assert_equal @gateway.scrub(pre_scrubbed), post_scrubbed
+  end
+
+  def test_purchase_with_network_token
+    purchase = stub_comms do
+      @gateway.purchase(@amount, @network_token_credit_card, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal request['Amount']['Currency'], 'UYU'
+      assert_equal request['Amount']['Details']['TipAmount'], '5'
+      assert_equal request['Flow'], 'direct'
+      assert_equal @network_token_credit_card.number, request['paymentMethod']['NetworkToken']['Number']
+      assert_equal @network_token_credit_card.payment_cryptogram, request['paymentMethod']['NetworkToken']['Cryptogram']
+      assert_equal @network_token_credit_card.first_name, request['paymentMethod']['NetworkToken']['Cardholder']['FirstName']
+    end.respond_with(successful_network_token_response)
+
+    assert_success purchase
+    assert_equal 'You have been mocked.', purchase.message
   end
 
   private
@@ -878,6 +940,134 @@ class PlexoTest < Test::Unit::TestCase
         "message": "The selected payment state is not valid.",
         "type": "api-error",
         "status": 400
+      }
+    RESPONSE
+  end
+
+  def successful_network_token_response
+    <<~RESPONSE
+      {
+        "id": "71d4e94a30124a7ba00809c00b7b1149",
+        "referenceId": "ecca673a4041317aec64e9e823b3c5d9",
+        "invoiceNumber": "12345abcde",
+        "status": "approved",
+        "flow": "direct",
+        "processingMethod": "api",
+        "browserDetails": {
+          "ipAddress": "127.0.0.1"
+        },
+        "createdAt": "2024-05-21T20:18:33.072Z",
+        "updatedAt": "2024-05-21T20:18:33.3896406Z",
+        "processedAt": "2024-05-21T20:18:33.3896407Z",
+        "merchant": {
+          "id": 3243,
+          "name": "spreedly",
+          "settings": {
+            "merchantIdentificationNumber": "98001456",
+            "metadata": {
+              "paymentProcessorId": "fiserv"
+            },
+            "paymentProcessor": {
+              "id": 4,
+              "acquirer": "fiserv"
+            }
+          },
+          "clientId": 221
+        },
+        "client": {
+          "id": 221,
+          "name": "Spreedly",
+          "owner": "PLEXO"
+        },
+        "paymentMethod": {
+          "id": "mastercard",
+          "legacyId": 4,
+          "name": "MASTERCARD",
+          "type": "card",
+          "card": {
+            "name": "555555XXXXXX4444",
+            "bin": "555555",
+            "last4": "4444",
+            "expMonth": 12,
+            "expYear": 20,
+            "cardholder": {
+              "firstName": "Santiago",
+              "lastName": "Navatta",
+              "email": "snavatta@plexo.com.uy",
+              "identification": {
+                "type": 1,
+                "value": "123456"
+              },
+              "billingAddress": {
+                "city": "Ottawa",
+                "country": "CA",
+                "line1": "456 My Street",
+                "line2": "Apt 1",
+                "postalCode": "K1C2N6",
+                "state": "ON"
+              }
+            },
+            "type": "prepaid",
+            "origin": "uruguay",
+            "token": "116d03bef91f4e0e8531af47ed34f690",
+            "issuer": {
+              "id": 21289,
+              "name": "",
+              "shortName": ""
+            },
+            "tokenization": {
+              "type": "temporal"
+            }
+          },
+          "processor": {
+            "id": 4,
+            "acquirer": "fiserv"
+          }
+        },
+        "installments": 1,
+        "amount": {
+          "currency": "UYU",
+          "total": 1,
+          "details": {
+            "tax": {
+              "type": "none",
+              "amount": 0
+            },
+            "taxedAmount": 0,
+            "tipAmount": 5
+          }
+        },
+        "items": [
+          {
+            "referenceId": "a6117dae92648552eb83a4ad0548833a",
+            "name": "prueba",
+            "description": "prueba desc",
+            "quantity": 1,
+            "price": 100,
+            "discount": 0,
+            "metadata": {}
+          }
+        ],
+        "metadata": {},
+        "transactions": [
+          {
+            "id": "664d019985707cbcfc11f0b2",
+            "parentId": "71d4e94a30124a7ba00809c00b7b1149",
+            "traceId": "c7b07c9c-d3c3-466b-8185-973321c6ab70",
+            "referenceId": "ecca673a4041317aec64e9e823b3c5d9",
+            "type": "purchase",
+            "status": "approved",
+            "createdAt": "2024-05-21T20:18:33.3896404Z",
+            "processedAt": "2024-05-21T20:18:33.3896397Z",
+            "resultCode": "0",
+            "resultMessage": "You have been mocked.",
+            "authorization": "123456",
+            "ticket": "02bbae8109fd4ceca0838628692486c6",
+            "metadata": {},
+            "amount": 1
+          }
+        ],
+        "actions": []
       }
     RESPONSE
   end

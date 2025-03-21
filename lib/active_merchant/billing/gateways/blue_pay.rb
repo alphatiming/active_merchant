@@ -344,14 +344,18 @@ module ActiveMerchant #:nodoc:
         success = parsed[:status] != 'error'
         message = parsed[:status]
 
-        Response.new(success, message, parsed,
+        Response.new(
+          success,
+          message,
+          parsed,
           test: test?,
-          authorization: parsed[:rebill_id])
+          authorization: parsed[:rebill_id]
+        )
       end
 
       def parse(body)
         # The bp20api has max one value per form field.
-        response_fields = Hash[CGI::parse(body).map { |k, v| [k.upcase, v.first] }]
+        response_fields = CGI::parse(body).map { |k, v| [k.upcase, v.first] }.to_h
 
         return parse_recurring(response_fields) if response_fields.include? 'REBILL_ID'
 
@@ -364,11 +368,15 @@ module ActiveMerchant #:nodoc:
         # normalize message
         message = message_from(parsed)
         success = parsed[:response_code] == '1'
-        Response.new(success, message, parsed,
+        Response.new(
+          success,
+          message,
+          parsed,
           test: test?,
           authorization: (parsed[:rebid] && parsed[:rebid] != '' ? parsed[:rebid] : parsed[:transaction_id]),
           avs_result: { code: parsed[:avs_result_code] },
-          cvv_result: parsed[:card_code])
+          cvv_result: parsed[:card_code]
+        )
       end
 
       def message_from(parsed)

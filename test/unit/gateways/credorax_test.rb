@@ -43,13 +43,16 @@ class CredoraxTest < Test::Unit::TestCase
       }
     }
 
-    @nt_credit_card = network_tokenization_credit_card('4176661000001015',
+    @nt_credit_card = network_tokenization_credit_card(
+      '4176661000001015',
       brand: 'visa',
       eci: '07',
       source: :network_token,
-      payment_cryptogram: 'AgAAAAAAosVKVV7FplLgQRYAAAA=')
+      payment_cryptogram: 'AgAAAAAAosVKVV7FplLgQRYAAAA='
+    )
 
-    @apple_pay_card = network_tokenization_credit_card('4176661000001015',
+    @apple_pay_card = network_tokenization_credit_card(
+      '4176661000001015',
       month: 10,
       year: Time.new.year + 2,
       first_name: 'John',
@@ -58,7 +61,8 @@ class CredoraxTest < Test::Unit::TestCase
       payment_cryptogram: 'YwAAAAAABaYcCMX/OhNRQAAAAAA=',
       eci: '07',
       transaction_id: 'abc123',
-      source: :apple_pay)
+      source: :apple_pay
+    )
   end
 
   def test_supported_card_types
@@ -501,7 +505,7 @@ class CredoraxTest < Test::Unit::TestCase
       @gateway.purchase(@amount, @credit_card, options_with_normalized_3ds)
     end.check_request do |_endpoint, data, _headers|
       assert_match(/i8=#{eci}%3A#{cavv}%3Anone/, data)
-      assert_match(/3ds_version=2.0/, data)
+      assert_match(/3ds_version=2/, data)
       assert_match(/3ds_dstrxid=#{ds_transaction_id}/, data)
     end.respond_with(successful_purchase_response)
   end
@@ -522,7 +526,7 @@ class CredoraxTest < Test::Unit::TestCase
       @gateway.purchase(@amount, @credit_card, options_with_normalized_3ds)
     end.check_request do |_endpoint, data, _headers|
       assert_match(/i8=#{eci}%3Anone%3Anone/, data)
-      assert_match(/3ds_version=2.0/, data)
+      assert_match(/3ds_version=2.2.0/, data)
       assert_match(/3ds_dstrxid=#{ds_transaction_id}/, data)
     end.respond_with(successful_purchase_response)
   end

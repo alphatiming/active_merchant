@@ -118,16 +118,18 @@ module ActiveMerchant #:nodoc:
 
       def add_payer(post, card, options)
         address = options[:billing_address] || options[:address]
+        phone_number = address[:phone] || address[:phone_number] if address
+
         post[:payer] = {}
         post[:payer][:name] = card.name
         post[:payer][:email] = options[:email] if options[:email]
         post[:payer][:birth_date] = options[:birth_date] if options[:birth_date]
-        post[:payer][:phone] = address[:phone] if address && address[:phone]
+        post[:payer][:phone] = phone_number if phone_number
         post[:payer][:document] = options[:document] if options[:document]
         post[:payer][:document2] = options[:document2] if options[:document2]
         post[:payer][:user_reference] = options[:user_reference] if options[:user_reference]
         post[:payer][:event_uuid] = options[:device_id] if options[:device_id]
-        post[:payer][:onboarding_ip_address] = options[:ip] if options[:ip]
+        post[:payer][:ip] = options[:ip] if options[:ip]
         post[:payer][:address] = add_address(post, card, options)
       end
 
@@ -163,21 +165,17 @@ module ActiveMerchant #:nodoc:
           post[:card][:network_token] = card.number
           post[:card][:cryptogram] = card.payment_cryptogram
           post[:card][:eci] = card.eci
-          # used case of Network Token: 'CARD_ON_FILE', 'SUBSCRIPTION', 'UNSCHEDULED_CARD_ON_FILE'
-          if options.dig(:stored_credential, :reason_type) == 'unscheduled'
-            if options.dig(:stored_credential, :initiator) == 'merchant'
-              post[:card][:stored_credential_type] = 'UNSCHEDULED_CARD_ON_FILE'
-            else
-              post[:card][:stored_credential_type] = 'CARD_ON_FILE'
-            end
-          else
-            post[:card][:stored_credential_type] = 'SUBSCRIPTION'
-          end
-          # required for MC debit recurrent in BR 'USED'(subsecuence Payments) . 'FIRST' an inital payment
-          post[:card][:stored_credential_usage] = (options[:stored_credential][:initial_transaction] ? 'FIRST' : 'USED') if options[:stored_credential]
         else
           post[:card][:number] = card.number
           post[:card][:cvv] = card.verification_value
+        end
+
+        if options[:stored_credential]
+          # required for MC debit recurrent in BR 'USED'(subsecuence Payments) . 'FIRST' an inital payment
+          post[:card][:stored_credential_usage] = (options[:stored_credential][:initial_transaction] ? 'FIRST' : 'USED')
+          post[:card][:network_payment_reference] = options[:stored_credential][:network_transaction_id] if options[:stored_credential][:network_transaction_id]
+          # used case of Network Token: 'CARD_ON_FILE', 'SUBSCRIPTION', 'UNSCHEDULED_CARD_ON_FILE'
+          post[:card][:stored_credential_type] = fetch_stored_credential_type(options[:stored_credential])
         end
 
         post[:card][:holder_name] = card.name
@@ -189,6 +187,14 @@ module ActiveMerchant #:nodoc:
         post[:card][:installments_id] = options[:installments_id] if options[:installments_id]
         post[:card][:force_type] = options[:force_type].to_s.upcase if options[:force_type]
         post[:card][:save] = options[:save] if options[:save]
+      end
+
+      def fetch_stored_credential_type(stored_credential)
+        if stored_credential[:reason_type] == 'unscheduled'
+          stored_credential[:initiator] == 'merchant' ? 'UNSCHEDULED_CARD_ON_FILE' : 'CARD_ON_FILE'
+        else
+          'SUBSCRIPTION'
+        end
       end
 
       def parse(body)
@@ -218,6 +224,7 @@ module ActiveMerchant #:nodoc:
           message_from(action, response),
           response,
           authorization: authorization_from(response),
+          network_transaction_id: network_transaction_id_from(response),
           avs_result: AVSResult.new(code: response['some_avs_response_key']),
           cvv_result: CVVResult.new(response['some_cvv_response_key']),
           test: test?,
@@ -242,6 +249,10 @@ module ActiveMerchant #:nodoc:
         response['id']
       end
 
+      def network_transaction_id_from(response)
+        response.dig('card', 'network_tx_reference')
+      end
+
       def error_code_from(action, response)
         return if success_from(action, response)
 
@@ -250,7 +261,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def url(action, parameters, options = {})
-        "#{(test? ? test_url : live_url)}/#{endpoint(action, parameters, options)}/"
+        "#{test? ? test_url : live_url}/#{endpoint(action, parameters, options)}/"
       end
 
       def endpoint(action, parameters, options)

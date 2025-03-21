@@ -48,7 +48,7 @@ module ActiveMerchant #:nodoc:
         'I5'  => 'M', #  +4 and Address Match
         'I6'  => 'W', #  +4 Match
         'I7'  => 'A', #  Address Match
-        'I8'  => 'C', #  No Match
+        'I8'  => 'C' #  No Match
       }
 
       PAYWAY_WS_SUCCESS = '5000'
@@ -224,7 +224,7 @@ module ActiveMerchant #:nodoc:
       def error_code_from(response)
         return '' if success_from(response)
 
-        error = !STANDARD_ERROR_CODE_MAPPING[response['paywayCode']].nil? ? STANDARD_ERROR_CODE_MAPPING[response['paywayCode']] : STANDARD_ERROR_CODE[:processing_error]
+        error = STANDARD_ERROR_CODE_MAPPING[response['paywayCode']].nil? ? STANDARD_ERROR_CODE[:processing_error] : STANDARD_ERROR_CODE_MAPPING[response['paywayCode']]
         return error
       end
 

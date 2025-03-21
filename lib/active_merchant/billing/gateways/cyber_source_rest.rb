@@ -28,12 +28,18 @@ module ActiveMerchant #:nodoc:
         maestro: '042',
         master: '002',
         unionpay: '062',
-        visa: '001'
+        visa: '001',
+        carnet: '058'
       }
 
-      PAYMENT_SOLUTION = {
+      WALLET_PAYMENT_SOLUTION = {
         apple_pay: '001',
         google_pay: '012'
+      }
+
+      NT_PAYMENT_SOLUTION = {
+        'master' => '014',
+        'visa' => '015'
       }
 
       def initialize(options = {})
@@ -93,12 +99,54 @@ module ActiveMerchant #:nodoc:
           gsub(/(\\?"number\\?":\\?")\d+/, '\1[FILTERED]').
           gsub(/(\\?"routingNumber\\?":\\?")\d+/, '\1[FILTERED]').
           gsub(/(\\?"securityCode\\?":\\?")\d+/, '\1[FILTERED]').
+          gsub(/(\\?"cryptogram\\?":\\?")[^<]+/, '\1[FILTERED]').
           gsub(/(signature=")[^"]*/, '\1[FILTERED]').
           gsub(/(keyid=")[^"]*/, '\1[FILTERED]').
           gsub(/(Digest: SHA-256=)[\w\/\+=]*/, '\1[FILTERED]')
       end
 
       private
+
+      def add_level_2_data(post, options)
+        return unless options[:purchase_order_number]
+
+        post[:orderInformation][:invoiceDetails] ||= {}
+        post[:orderInformation][:invoiceDetails][:purchaseOrderNumber] = options[:purchase_order_number]
+      end
+
+      def add_level_3_data(post, options)
+        return unless options[:line_items]
+
+        post[:orderInformation][:lineItems] = options[:line_items]
+        post[:processingInformation][:purchaseLevel] = '3'
+        post[:orderInformation][:shipping_details] = { shipFromPostalCode: options[:ships_from_postal_code] }
+        post[:orderInformation][:amountDetails] ||= {}
+        post[:orderInformation][:amountDetails][:discountAmount] = options[:discount_amount]
+      end
+
+      def add_three_ds(post, payment_method, options)
+        return unless three_d_secure = options[:three_d_secure]
+
+        post[:consumerAuthenticationInformation] ||= {}
+        if payment_method.brand == 'master'
+          post[:consumerAuthenticationInformation][:ucafAuthenticationData] = three_d_secure[:cavv]
+          post[:consumerAuthenticationInformation][:ucafCollectionIndicator] = '2'
+        else
+          post[:consumerAuthenticationInformation][:cavv] = three_d_secure[:cavv]
+        end
+        post[:consumerAuthenticationInformation][:cavvAlgorithm] = three_d_secure[:cavv_algorithm] if three_d_secure[:cavv_algorithm]
+        post[:consumerAuthenticationInformation][:paSpecificationVersion] = three_d_secure[:version] if three_d_secure[:version]
+        post[:consumerAuthenticationInformation][:directoryServerTransactionID] = three_d_secure[:ds_transaction_id] if three_d_secure[:ds_transaction_id]
+        post[:consumerAuthenticationInformation][:eciRaw] = three_d_secure[:eci] if three_d_secure[:eci]
+        if three_d_secure[:xid].present?
+          post[:consumerAuthenticationInformation][:xid] = three_d_secure[:xid]
+        else
+          post[:consumerAuthenticationInformation][:xid] = three_d_secure[:cavv]
+        end
+        post[:consumerAuthenticationInformation][:veresEnrolled] = three_d_secure[:enrolled] if three_d_secure[:enrolled]
+        post[:consumerAuthenticationInformation][:paresStatus] = three_d_secure[:authentication_response_status] if three_d_secure[:authentication_response_status]
+        post
+      end
 
       def build_void_request(amount = nil)
         { reversalInformation: { amountDetails: { totalAmount: nil } } }.tap do |post|
@@ -118,6 +166,9 @@ module ActiveMerchant #:nodoc:
           add_business_rules_data(post, payment, options)
           add_partner_solution_id(post)
           add_stored_credentials(post, payment, options)
+          add_three_ds(post, payment, options)
+          add_level_2_data(post, options)
+          add_level_3_data(post, options)
         end.compact
       end
 
@@ -191,25 +242,30 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_network_tokenization_card(post, payment, options)
-        post[:processingInformation][:paymentSolution] = PAYMENT_SOLUTION[payment.source]
-        post[:processingInformation][:commerceIndicator] = 'internet' unless card_brand(payment) == 'jcb'
+        post[:processingInformation][:commerceIndicator] = 'internet' unless options[:stored_credential] || card_brand(payment) == 'jcb'
 
         post[:paymentInformation][:tokenizedCard] = {
           number: payment.number,
           expirationMonth: payment.month,
           expirationYear: payment.year,
           cryptogram: payment.payment_cryptogram,
-          transactionType: '1',
-          type:  CREDIT_CARD_CODES[card_brand(payment).to_sym]
+          type:  CREDIT_CARD_CODES[card_brand(payment).to_sym],
+          transactionType: payment.source == :network_token ? '3' : '1'
         }
 
-        if card_brand(payment) == 'master'
-          post[:consumerAuthenticationInformation] = {
-            ucafAuthenticationData: payment.payment_cryptogram,
-            ucafCollectionIndicator: '2'
-          }
+        if payment.source == :network_token && NT_PAYMENT_SOLUTION[payment.brand]
+          post[:processingInformation][:paymentSolution] = NT_PAYMENT_SOLUTION[payment.brand]
         else
-          post[:consumerAuthenticationInformation] = { cavv: payment.payment_cryptogram }
+          # Apple Pay / Google Pay
+          post[:processingInformation][:paymentSolution] = WALLET_PAYMENT_SOLUTION[payment.source]
+          if card_brand(payment) == 'master'
+            post[:consumerAuthenticationInformation] = {
+              ucafAuthenticationData: payment.payment_cryptogram,
+              ucafCollectionIndicator: '2'
+            }
+          else
+            post[:consumerAuthenticationInformation] = { cavv: payment.payment_cryptogram }
+          end
         end
       end
 
@@ -258,56 +314,43 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_stored_credentials(post, payment, options)
-        return unless stored_credential = options[:stored_credential]
+        return unless options[:stored_credential]
 
-        options = stored_credential_options(stored_credential, options.fetch(:reason_code, ''))
-        post[:processingInformation][:commerceIndicator] = options.fetch(:transaction_type, 'internet')
-        stored_credential[:initial_transaction] ? initial_transaction(post, options) : subsequent_transaction(post, options)
+        post[:processingInformation][:commerceIndicator] = commerce_indicator(options.dig(:stored_credential, :reason_type))
+        add_authorization_options(post, payment, options)
       end
 
-      def stored_credential_options(options, reason_code)
-        transaction_type = options[:reason_type]
-        transaction_type = 'install' if transaction_type == 'installment'
-        initiator = options[:initiator] if  options[:initiator]
-        initiator = 'customer' if initiator == 'cardholder'
-        stored_on_file = options[:reason_type] == 'recurring'
-        options.merge({
-          transaction_type: transaction_type,
-          initiator: initiator,
-          reason_code: reason_code,
-          stored_on_file: stored_on_file
-        })
+      def commerce_indicator(reason_type)
+        case reason_type
+        when 'recurring'
+          'recurring'
+        when 'installment'
+          'install'
+        else
+          'internet'
+        end
       end
 
-      def add_processing_information(initiator, merchant_initiated_transaction_hash = {})
-        {
+      def add_authorization_options(post, payment, options)
+        initiator = options.dig(:stored_credential, :initiator) == 'cardholder' ? 'customer' : 'merchant'
+        authorization_options = {
           authorizationOptions: {
             initiator: {
-              type: initiator,
-              merchantInitiatedTransaction: merchant_initiated_transaction_hash,
-              storedCredentialUsed: true
+              type: initiator
             }
           }
         }.compact
-      end
 
-      def initial_transaction(post, options)
-        processing_information = add_processing_information(options[:initiator], {
-          reason: options[:reason_code]
-        })
-
-        post[:processingInformation].merge!(processing_information)
-      end
-
-      def subsequent_transaction(post, options)
-        network_transaction_id = options[:network_transaction_id] || options.dig(:stored_credential, :network_transaction_id) || ''
-        processing_information = add_processing_information(options[:initiator], {
-          originalAuthorizedAmount: post.dig(:orderInformation, :amountDetails, :totalAmount),
-          previousTransactionID: network_transaction_id,
-          reason: options[:reason_code],
-          storedCredentialUsed: options[:stored_on_file]
-        })
-        post[:processingInformation].merge!(processing_information)
+        authorization_options[:authorizationOptions][:initiator][:storedCredentialUsed] = true if initiator == 'merchant'
+        authorization_options[:authorizationOptions][:initiator][:credentialStoredOnFile] = true if options.dig(:stored_credential, :initial_transaction)
+        authorization_options[:authorizationOptions][:initiator][:merchantInitiatedTransaction] ||= {}
+        unless options.dig(:stored_credential, :initial_transaction)
+          network_transaction_id = options[:network_transaction_id] || options.dig(:stored_credential, :network_transaction_id) || ''
+          authorization_options[:authorizationOptions][:initiator][:merchantInitiatedTransaction][:previousTransactionID] = network_transaction_id
+          authorization_options[:authorizationOptions][:initiator][:merchantInitiatedTransaction][:originalAuthorizedAmount] = post.dig(:orderInformation, :amountDetails, :totalAmount) if card_brand(payment) == 'discover'
+        end
+        authorization_options[:authorizationOptions][:initiator][:merchantInitiatedTransaction][:reason] = options[:reason_code] if options[:reason_code]
+        post[:processingInformation].merge!(authorization_options)
       end
 
       def network_transaction_id_from(response)
@@ -315,7 +358,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def url(action)
-        "#{(test? ? test_url : live_url)}/pts/v2/#{action}"
+        "#{test? ? test_url : live_url}/pts/v2/#{action}"
       end
 
       def host
@@ -330,7 +373,7 @@ module ActiveMerchant #:nodoc:
         add_reconciliation_id(post, options)
         add_sec_code(post, options)
         add_invoice_number(post, options)
-        response = parse(ssl_post(url(action), post.to_json, auth_headers(action, post)))
+        response = parse(ssl_post(url(action), post.to_json, auth_headers(action, options, post)))
         Response.new(
           success_from(response),
           message_from(response),
@@ -378,7 +421,7 @@ module ActiveMerchant #:nodoc:
         string_to_sign = {
           host: host,
           date: gmtdatetime,
-          "(request-target)": "#{http_method} /pts/v2/#{resource}",
+          "request-target": "#{http_method} /pts/v2/#{resource}",
           digest: digest,
           "v-c-merchant-id": @options[:merchant_id]
         }.map { |k, v| "#{k}: #{v}" }.join("\n").force_encoding(Encoding::UTF_8)
@@ -386,7 +429,7 @@ module ActiveMerchant #:nodoc:
         {
           keyid: @options[:public_key],
           algorithm: 'HmacSHA256',
-          headers: "host date (request-target)#{digest.present? ? ' digest' : ''} v-c-merchant-id",
+          headers: "host date request-target#{digest.present? ? ' digest' : ''} v-c-merchant-id",
           signature: sign_payload(string_to_sign)
         }.map { |k, v| %{#{k}="#{v}"} }.join(', ')
       end
@@ -396,14 +439,14 @@ module ActiveMerchant #:nodoc:
         Base64.strict_encode64(OpenSSL::HMAC.digest('sha256', decoded_key, payload))
       end
 
-      def auth_headers(action, post, http_method = 'post')
+      def auth_headers(action, options, post, http_method = 'post')
         digest = "SHA-256=#{Digest::SHA256.base64digest(post.to_json)}" if post.present?
         date = Time.now.httpdate
 
         {
           'Accept' => 'application/hal+json;charset=utf-8',
           'Content-Type' => 'application/json;charset=utf-8',
-          'V-C-Merchant-Id' => @options[:merchant_id],
+          'V-C-Merchant-Id' => options[:merchant_id] || @options[:merchant_id],
           'Date' => date,
           'Host' => host,
           'Signature' => get_http_signature(action, digest, http_method, date),
@@ -441,7 +484,8 @@ module ActiveMerchant #:nodoc:
       def add_invoice_number(post, options)
         return unless options[:invoice_number].present?
 
-        post[:orderInformation][:invoiceDetails] = { invoiceNumber: options[:invoice_number] }
+        post[:orderInformation][:invoiceDetails] ||= {}
+        post[:orderInformation][:invoiceDetails][:invoiceNumber] = options[:invoice_number]
       end
 
       def add_partner_solution_id(post)

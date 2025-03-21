@@ -1,4 +1,4 @@
-require 'test_helper.rb'
+require 'test_helper'
 
 class RemoteOrbitalGatewayTest < Test::Unit::TestCase
   def setup
@@ -6,10 +6,11 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
     @gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital_gateway))
     @echeck_gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital_asv_aoa_gateway))
     @three_ds_gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital_3ds_gateway))
-
+    @tpv_orbital_gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital_tpv_gateway))
     @amount = 100
     @google_pay_amount = 10000
     @credit_card = credit_card('4556761029983886')
+    @mastercard_card_tpv = credit_card('2521000000000006')
     @declined_card = credit_card('4000300011112220')
     # Electronic Check object with test credentials of saving account
     @echeck = check(account_number: '072403004', account_type: 'savings', routing_number: '072403004')
@@ -50,7 +51,15 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
       address2: address[:address2],
       city: address[:city],
       state: address[:state],
-      zip: address[:zip]
+      zip: address[:zip],
+      requestor_name: 'ArtVandelay123',
+      total_tax_amount: '75',
+      national_tax: '625',
+      pst_tax_reg_number: '8675309',
+      customer_vat_reg_number: '1234567890',
+      merchant_vat_reg_number: '987654321',
+      commodity_code: 'SUMM',
+      local_tax_rate: '6250'
     }
 
     @level_3_options_visa = {
@@ -60,7 +69,11 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
       dest_country: 'USA',
       discount_amount: 1,
       vat_tax: 1,
-      vat_rate: 25
+      vat_rate: 25,
+      invoice_discount_treatment: 1,
+      tax_treatment: 1,
+      ship_vat_rate: 10,
+      unique_vat_invoice_ref: 'ABC123'
     }
 
     @level_2_options_master = {
@@ -195,11 +208,13 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_master_card_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'master')
+      brand: 'master'
+    )
     assert response = @gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -249,11 +264,13 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_american_express_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'american_express')
+      brand: 'american_express'
+    )
     assert response = @gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -261,11 +278,13 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_discover_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'discover')
+      brand: 'discover'
+    )
     assert response = @gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -653,13 +672,13 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
 
   def test_default_payment_delivery_with_no_payment_delivery_sent
     transcript = capture_transcript(@echeck_gateway) do
-      @echeck_gateway.authorize(@amount, @echeck, @options.merge(order_id: '4'))
+      response = @echeck_gateway.authorize(@amount, @echeck, @options.merge(order_id: '4'))
+      assert_equal '1', response.params['approval_status']
+      assert_equal '00', response.params['resp_code']
     end
 
     assert_match(/<BankPmtDelv>B/, transcript)
     assert_match(/<MessageType>A/, transcript)
-    assert_match(/<ApprovalStatus>1/, transcript)
-    assert_match(/<RespCode>00/, transcript)
   end
 
   def test_sending_echeck_adds_ecp_details_for_refund
@@ -673,12 +692,12 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
     transcript = capture_transcript(@echeck_gateway) do
       refund = @echeck_gateway.refund(@amount, capture.authorization, @options.merge(payment_method: @echeck, action_code: 'W6', auth_method: 'I'))
       assert_success refund
+      assert_equal '1', refund.params['approval_status']
     end
 
     assert_match(/<ECPActionCode>W6/, transcript)
     assert_match(/<ECPAuthMethod>I/, transcript)
     assert_match(/<MessageType>R/, transcript)
-    assert_match(/<ApprovalStatus>1/, transcript)
   end
 
   def test_sending_credit_card_performs_correct_refund
@@ -695,43 +714,40 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
 
   def test_echeck_purchase_with_address_responds_with_name
     transcript = capture_transcript(@echeck_gateway) do
-      @echeck_gateway.authorize(@amount, @echeck, @options.merge(order_id: '2'))
+      response = @echeck_gateway.authorize(@amount, @echeck, @options.merge(order_id: '2'))
+      assert_equal '00', response.params['resp_code']
+      assert_equal 'Approved', response.params['status_msg']
     end
 
     assert_match(/<AVSname>Jim Smith/, transcript)
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/atusMsg>Approved</, transcript)
   end
 
   def test_echeck_purchase_with_no_address_responds_with_name
     test_check_no_address = check(name: 'Test McTest')
 
     transcript = capture_transcript(@echeck_gateway) do
-      @echeck_gateway.authorize(@amount, test_check_no_address, @options.merge(order_id: '2', address: nil, billing_address: nil))
+      response = @echeck_gateway.authorize(@amount, test_check_no_address, @options.merge(order_id: '2', address: nil, billing_address: nil))
+      assert_equal '00', response.params['resp_code']
+      assert_equal 'Approved', response.params['status_msg']
     end
 
     assert_match(/<AVSname>Test McTest/, transcript)
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/atusMsg>Approved</, transcript)
   end
 
   def test_credit_purchase_with_address_responds_with_name
     transcript = capture_transcript(@gateway) do
-      @gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2'))
+      response = @gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2'))
+      assert_equal '00', response.params['resp_code']
+      assert_equal 'Approved', response.params['status_msg']
     end
 
     assert_match(/<AVSname>Longbob Longsen/, transcript)
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/<StatusMsg>Approved/, transcript)
   end
 
   def test_credit_purchase_with_no_address_responds_with_no_name
-    transcript = capture_transcript(@gateway) do
-      @gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2', address: nil, billing_address: nil))
-    end
-
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/<StatusMsg>Approved/, transcript)
+    response = @gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2', address: nil, billing_address: nil))
+    assert_equal '00', response.params['resp_code']
+    assert_equal 'Approved', response.params['status_msg']
   end
 
   # == Certification Tests
@@ -821,6 +837,98 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
     response = @gateway.verify(@credit_card, @options)
     assert_success response
     assert_equal 'No reason to decline', response.message
+  end
+
+  def test_successful_store
+    response = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success response
+    assert_false response.params['safetech_token'].blank?
+  end
+
+  def test_successful_purchase_stored_token
+    store = @tpv_orbital_gateway.store(@credit_card, @options)
+    assert_success store
+    response = @tpv_orbital_gateway.purchase(@amount, store.authorization, @options.merge(card_brand: 'VI'))
+    assert_success response
+    assert_equal response.params['card_brand'], 'VI'
+  end
+
+  def test_successful_authorize_stored_token
+    store = @tpv_orbital_gateway.store(@credit_card, @options)
+    assert_success store
+    auth = @tpv_orbital_gateway.authorize(29, store.authorization, @options.merge(card_brand: 'VI'))
+    assert_success auth
+  end
+
+  def test_successful_authorize_stored_token_mastercard
+    store = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success store
+    response = @tpv_orbital_gateway.authorize(29, store.authorization, @options.merge(card_brand: 'MC'))
+    assert_success response
+    assert_equal response.params['card_brand'], 'MC'
+  end
+
+  def test_failed_authorize_and_capture
+    store = @tpv_orbital_gateway.store(@credit_card, @options)
+    assert_success store
+    authorization = store.authorization.split(';').values_at(2).first
+    response = @tpv_orbital_gateway.capture(39, authorization, @options.merge(card_brand: 'VI'))
+    assert_failure response
+    assert_equal response.params['status_msg'], "The LIDM you supplied (#{authorization}) does not match with any existing transaction"
+  end
+
+  def test_successful_authorize_and_capture_with_stored_token
+    store = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success store
+    auth = @tpv_orbital_gateway.authorize(28, store.authorization, @options.merge(card_brand: 'MC'))
+    assert_success auth
+    assert_equal auth.params['card_brand'], 'MC'
+    response = @tpv_orbital_gateway.capture(28, auth.authorization, @options.merge(card_brand: 'MC'))
+    assert_success response
+  end
+
+  def test_successful_authorize_with_stored_token_and_refund
+    store = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success store
+    auth = @tpv_orbital_gateway.authorize(38, store.authorization, @options.merge(card_brand: 'MC'))
+    assert_success auth
+    response = @tpv_orbital_gateway.refund(38, auth.authorization, @options.merge(card_brand: 'MC'))
+    assert_success response
+  end
+
+  def test_failed_refund_wrong_token
+    store = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success store
+    auth = @tpv_orbital_gateway.authorize(38, store.authorization, @options.merge(card_brand: 'MC'))
+    assert_success auth
+    authorization = store.authorization.split(';').values_at(2).first
+    response = @tpv_orbital_gateway.refund(38, authorization, @options.merge(card_brand: 'MC'))
+    assert_failure response
+    assert_equal response.params['status_msg'], "The LIDM you supplied (#{authorization}) does not match with any existing transaction"
+  end
+
+  def test_successful_purchase_with_stored_token_and_refund
+    store = @tpv_orbital_gateway.store(@mastercard_card_tpv, @options)
+    assert_success store
+    purchase = @tpv_orbital_gateway.purchase(38, store.authorization, @options.merge(card_brand: 'MC'))
+    assert_success purchase
+    response = @tpv_orbital_gateway.refund(38, purchase.authorization, @options.merge(card_brand: 'MC'))
+    assert_success response
+  end
+
+  def test_successful_purchase_without_store
+    response = @tpv_orbital_gateway.purchase(@amount, @credit_card, @options)
+    assert_success response
+    assert_equal response.params['safetech_token'], nil
+  end
+
+  def test_failed_purchase_with_stored_token
+    auth = @tpv_orbital_gateway.authorize(@amount, @credit_card, @options.merge(store: true))
+    assert_success auth
+    options = @options.merge!(card_brand: 'VI')
+    response = @tpv_orbital_gateway.purchase(@amount, nil, options)
+    assert_failure response
+    assert_equal response.params['status_msg'], 'Error validating card/account number range'
   end
 
   def test_successful_different_cards
@@ -1133,7 +1241,13 @@ class TandemOrbitalTests < Test::Unit::TestCase
       tax_indicator: '1',
       tax: '75',
       purchase_order: '123abc',
-      zip: address[:zip]
+      zip: address[:zip],
+      requestor_name: 'ArtVandelay123',
+      total_tax_amount: '75',
+      pst_tax_reg_number: '8675309',
+      customer_vat_reg_number: '1234567890',
+      commodity_code: 'SUMM',
+      local_tax_rate: '6250'
     }
 
     @level_3_options = {
@@ -1143,7 +1257,11 @@ class TandemOrbitalTests < Test::Unit::TestCase
       dest_country: 'USA',
       discount_amount: 1,
       vat_tax: 1,
-      vat_rate: 25
+      vat_rate: 25,
+      invoice_discount_treatment: 1,
+      tax_treatment: 1,
+      ship_vat_rate: 10,
+      unique_vat_invoice_ref: 'ABC123'
     }
 
     @line_items = [
@@ -1202,6 +1320,13 @@ class TandemOrbitalTests < Test::Unit::TestCase
     assert_equal 'Approved', response.message
   end
 
+  def test_successful_purchase_with_level_2_data_canadian_currency
+    response = @tandem_gateway.purchase(@amount, @credit_card, @options.merge(currency: 'CAD', merchant_vat_reg_number: '987654321', national_tax: '625', level_2_data: @level_2_options))
+
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
   def test_successful_purchase_with_level_3_data
     response = @tandem_gateway.purchase(@amount, @credit_card, @options.merge(level_2_data: @level_2_options, level_3_data: @level_3_options, line_items: @line_items))
 
@@ -1226,11 +1351,13 @@ class TandemOrbitalTests < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_master_card_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'master')
+      brand: 'master'
+    )
     assert response = @tandem_gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -1238,11 +1365,13 @@ class TandemOrbitalTests < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_american_express_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'american_express')
+      brand: 'american_express'
+    )
     assert response = @tandem_gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -1250,11 +1379,13 @@ class TandemOrbitalTests < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_discover_network_tokenization_credit_card
-    network_card = network_tokenization_credit_card('4788250000028291',
+    network_card = network_tokenization_credit_card(
+      '4788250000028291',
       payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       transaction_id: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=',
       verification_value: '111',
-      brand: 'discover')
+      brand: 'discover'
+    )
     assert response = @tandem_gateway.purchase(3000, network_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -1452,21 +1583,18 @@ class TandemOrbitalTests < Test::Unit::TestCase
 
   def test_credit_purchase_with_address_responds_with_name
     transcript = capture_transcript(@tandem_gateway) do
-      @tandem_gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2'))
+      response = @tandem_gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2'))
+      assert_equal '00', response.params['resp_code']
+      assert_equal 'Approved', response.params['status_msg']
     end
 
     assert_match(/<AVSname>Longbob Longsen/, transcript)
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/<StatusMsg>Approved/, transcript)
   end
 
   def test_credit_purchase_with_no_address_responds_with_no_name
-    transcript = capture_transcript(@tandem_gateway) do
-      @tandem_gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2', address: nil, billing_address: nil))
-    end
-
-    assert_match(/<RespCode>00/, transcript)
-    assert_match(/<StatusMsg>Approved/, transcript)
+    response = @tandem_gateway.authorize(@amount, @credit_card, @options.merge(order_id: '2', address: nil, billing_address: nil))
+    assert_equal '00', response.params['resp_code']
+    assert_equal 'Approved', response.params['status_msg']
   end
 
   def test_void_transactions

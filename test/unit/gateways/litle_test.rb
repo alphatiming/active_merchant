@@ -42,6 +42,16 @@ class LitleTest < Test::Unit::TestCase
         payment_cryptogram: 'BwABBJQ1AgAAAAAgJDUCAAAAAAA='
       }
     )
+    @decrypted_network_token = NetworkTokenizationCreditCard.new(
+      {
+        source: :network_token,
+        month: '02',
+        year: '2050',
+        brand: 'master',
+        number:  '5112010000000000',
+        payment_cryptogram: 'BwABBJQ1AgAAAAAgJDUCAAAAAAA='
+      }
+    )
     @amount = 100
     @options = {}
     @check = check(
@@ -54,7 +64,8 @@ class LitleTest < Test::Unit::TestCase
       name: 'John Smith',
       routing_number: '011075150',
       account_number: '1099999999',
-      account_type: 'checking'
+      account_type: nil,
+      account_holder_type: 'checking'
     )
 
     @long_address = {
@@ -79,6 +90,26 @@ class LitleTest < Test::Unit::TestCase
     assert_equal 'Approved', response.message
     assert_equal '100000000000000006;sale;100', response.authorization
     assert response.test?
+  end
+
+  def test_successful_purchase_prepaid_card_141
+    response = stub_comms do
+      @gateway.purchase(@amount, @credit_card)
+    end.respond_with(successful_purchase_for_prepaid_cards_141)
+
+    assert_success response
+    assert_equal 'Consumer non-reloadable prepaid card, Approved', response.message
+    assert_equal '141', response.params['response']
+  end
+
+  def test_successful_purchase_prepaid_card_142
+    response = stub_comms do
+      @gateway.purchase(@amount, @credit_card)
+    end.respond_with(successful_purchase_for_prepaid_cards_142)
+
+    assert_success response
+    assert_equal 'Consumer single-use virtual card number, Approved', response.message
+    assert_equal '142', response.params['response']
   end
 
   def test_successful_purchase_with_010_response
@@ -132,6 +163,21 @@ class LitleTest < Test::Unit::TestCase
   def test_successful_purchase_with_echeck
     response = stub_comms do
       @gateway.purchase(2004, @check)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(%r(<accType>Checking</accType>), data)
+    end.respond_with(successful_purchase_with_echeck_response)
+
+    assert_success response
+
+    assert_equal '621100411297330000;echeckSales;2004', response.authorization
+    assert response.test?
+  end
+
+  def test_successful_purchase_with_echeck_and_account_holder_type
+    response = stub_comms do
+      @gateway.purchase(2004, @authorize_check)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(%r(<accType>Checking</accType>), data)
     end.respond_with(successful_purchase_with_echeck_response)
 
     assert_success response
@@ -325,6 +371,14 @@ class LitleTest < Test::Unit::TestCase
       @gateway.purchase(@amount, @decrypted_google_pay)
     end.check_request do |_endpoint, data, _headers|
       assert_match '<orderSource>androidpay</orderSource>', data
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_add_network_token_order_source
+    stub_comms do
+      @gateway.purchase(@amount, @decrypted_network_token)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match '<orderSource>ecommerce</orderSource>', data
     end.respond_with(successful_purchase_response)
   end
 
@@ -597,7 +651,7 @@ class LitleTest < Test::Unit::TestCase
       @gateway.authorize(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
       assert_match(%r(<processingType>cardholderInitiatedCOF</processingType>), data)
-      assert_match(%r(<originalNetworkTransactionId>#{network_transaction_id}</originalNetworkTransactionId>), data)
+      assert_not_match(%r(<originalNetworkTransactionId>#{network_transaction_id}</originalNetworkTransactionId>), data)
       assert_match(%r(<orderSource>ecommerce</orderSource>), data)
     end.respond_with(successful_authorize_stored_credentials)
 
@@ -621,8 +675,8 @@ class LitleTest < Test::Unit::TestCase
       @gateway.authorize(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
       assert_match(%r(<processingType>cardholderInitiatedCOF</processingType>), data)
-      assert_match(%r(<originalNetworkTransactionId>#{network_transaction_id}</originalNetworkTransactionId>), data)
-      assert_match(%r(<orderSource>3dsAuthenticated</orderSource>), data)
+      assert_not_match(%r(<originalNetworkTransactionId>#{network_transaction_id}</originalNetworkTransactionId>), data)
+      assert_match(%r(<orderSource>ecommerce</orderSource>), data)
     end.respond_with(successful_authorize_stored_credentials)
 
     assert_success response
@@ -641,6 +695,7 @@ class LitleTest < Test::Unit::TestCase
     response = stub_comms do
       @gateway.authorize(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
+      assert_match(%r(<orderSource>ecommerce</orderSource>), data)
       assert_match(%r(<processingType>initialCOF</processingType>), data)
     end.respond_with(successful_authorize_stored_credentials)
 
@@ -700,6 +755,7 @@ class LitleTest < Test::Unit::TestCase
     response = stub_comms do
       @gateway.authorize(@amount, @credit_card, options)
     end.check_request do |_endpoint, data, _headers|
+      assert_not_match(%r(<processingType>), data)
       assert_match(%r(<originalNetworkTransactionId>#{network_transaction_id}</originalNetworkTransactionId>), data)
       assert_match(%r(<orderSource>installment</orderSource>), data)
     end.respond_with(successful_authorize_stored_credentials)
@@ -808,6 +864,48 @@ class LitleTest < Test::Unit::TestCase
           <responseTime>2018-01-09T14:02:20</responseTime>
           <message>Approved</message>
         </echeckSalesResponse>
+      </litleOnlineResponse>
+    )
+  end
+
+  def successful_purchase_for_prepaid_cards_141
+    %(
+      <litleOnlineResponse version="9.14" xmlns="http://www.litle.com/schema" response="0" message="Valid Format">
+        <saleResponse id="486344231" reportGroup="Report Group" customerId="10000009">
+          <litleTxnId>456342657452</litleTxnId>
+          <orderId>123456</orderId>
+          <response>141</response>
+          <responseTime>2024-04-09T19:50:30</responseTime>
+          <postDate>2024-04-09</postDate>
+          <message>Consumer non-reloadable prepaid card, Approved</message>
+          <authCode>382410</authCode>
+          <fraudResult>
+            <avsResult>01</avsResult>
+            <cardValidationResult>M</cardValidationResult>
+          </fraudResult>
+          <networkTransactionId>MPMMPMPMPMPU</networkTransactionId>
+        </saleResponse>
+      </litleOnlineResponse>
+    )
+  end
+
+  def successful_purchase_for_prepaid_cards_142
+    %(
+      <litleOnlineResponse version="9.14" xmlns="http://www.litle.com/schema" response="0" message="Valid Format">
+        <saleResponse id="486344231" reportGroup="Report Group" customerId="10000009">
+          <litleTxnId>456342657452</litleTxnId>
+          <orderId>123456</orderId>
+          <response>142</response>
+          <responseTime>2024-04-09T19:50:30</responseTime>
+          <postDate>2024-04-09</postDate>
+          <message>Consumer single-use virtual card number, Approved</message>
+          <authCode>382410</authCode>
+          <fraudResult>
+            <avsResult>01</avsResult>
+            <cardValidationResult>M</cardValidationResult>
+          </fraudResult>
+          <networkTransactionId>MPMMPMPMPMPU</networkTransactionId>
+        </saleResponse>
       </litleOnlineResponse>
     )
   end

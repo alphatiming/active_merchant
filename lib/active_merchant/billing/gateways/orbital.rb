@@ -30,7 +30,7 @@ module ActiveMerchant #:nodoc:
     class OrbitalGateway < Gateway
       include Empty
 
-      API_VERSION = '9.0'
+      API_VERSION = '9.5'
 
       POST_HEADERS = {
         'MIME-Version' => '1.1',
@@ -193,6 +193,10 @@ module ActiveMerchant #:nodoc:
         'checking' => 'C'
       }
 
+      # safetech token flags
+      GET_TOKEN = 'GT'
+      USE_TOKEN = 'UT'
+
       def initialize(options = {})
         requires!(options, :merchant_id)
         requires!(options, :login, :password) unless options[:ip_authentication]
@@ -251,6 +255,11 @@ module ActiveMerchant #:nodoc:
         end
 
         commit(order, :refund, options[:retry_logic], options[:trace_number])
+      end
+
+      # Orbital save a payment method if the TokenTxnType is 'GT', that's why we use this as the default value for store
+      def store(creditcard, options = {})
+        authorize(0, creditcard, options.merge({ token_txn_type: GET_TOKEN }))
       end
 
       def void(authorization, options = {}, deprecated = {})
@@ -487,6 +496,35 @@ module ActiveMerchant #:nodoc:
         end
       end
 
+      def add_level2_card_and_more_tax(xml, options = {})
+        if (level2 = options[:level_2_data])
+          xml.tag! :PCardRequestorName, byte_limit(level2[:requestor_name], 38) if level2[:requestor_name]
+          xml.tag! :PCardLocalTaxRate, byte_limit(level2[:local_tax_rate], 5) if level2[:local_tax_rate]
+          # Canadian Merchants Only
+          xml.tag! :PCardNationalTax, byte_limit(level2[:national_tax], 12) if level2[:national_tax]
+          xml.tag! :PCardPstTaxRegNumber, byte_limit(level2[:pst_tax_reg_number], 15) if level2[:pst_tax_reg_number]
+          xml.tag! :PCardCustomerVatRegNumber, byte_limit(level2[:customer_vat_reg_number], 13) if level2[:customer_vat_reg_number]
+          # Canadian Merchants Only
+          xml.tag! :PCardMerchantVatRegNumber, byte_limit(level2[:merchant_vat_reg_number], 20) if level2[:merchant_vat_reg_number]
+          xml.tag! :PCardTotalTaxAmount, byte_limit(level2[:total_tax_amount], 12) if level2[:total_tax_amount]
+        end
+      end
+
+      def add_card_commodity_code(xml, options = {})
+        if (level2 = options[:level_2_data]) && (level2[:commodity_code])
+          xml.tag! :PCardCommodityCode, byte_limit(level2[:commodity_code], 4)
+        end
+      end
+
+      def add_level3_vat_fields(xml, options = {})
+        if (level3 = options[:level_3_data])
+          xml.tag! :PC3InvoiceDiscTreatment, byte_limit(level3[:invoice_discount_treatment], 1) if level3[:invoice_discount_treatment]
+          xml.tag! :PC3TaxTreatment, byte_limit(level3[:tax_treatment], 1) if level3[:tax_treatment]
+          xml.tag! :PC3UniqueVATInvoiceRefNum, byte_limit(level3[:unique_vat_invoice_ref], 15) if level3[:unique_vat_invoice_ref]
+          xml.tag! :PC3ShipVATRate, byte_limit(level3[:ship_vat_rate], 4) if level3[:ship_vat_rate]
+        end
+      end
+
       #=====ADDRESS FIELDS=====
 
       def add_address(xml, payment_source, options)
@@ -536,9 +574,9 @@ module ActiveMerchant #:nodoc:
       end
 
       def billing_name(payment_source, options)
-        if payment_source&.name.present?
+        if !payment_source.is_a?(String) && payment_source&.name.present?
           payment_source.name[0..29]
-        elsif options[:billing_address][:name].present?
+        elsif options[:billing_address] && options[:billing_address][:name].present?
           options[:billing_address][:name][0..29]
         end
       end
@@ -555,10 +593,17 @@ module ActiveMerchant #:nodoc:
         options[:billing_address] || options[:address]
       end
 
+      def add_safetech_token_data(xml, payment_source, options)
+        payment_source_token = split_authorization(payment_source).values_at(2).first
+        xml.tag! :CardBrand, options[:card_brand]
+        xml.tag! :AccountNum, payment_source_token
+      end
+
       #=====PAYMENT SOURCE FIELDS=====
 
       # Payment can be done through either Credit Card or Electronic Check
       def add_payment_source(xml, payment_source, options = {})
+        add_safetech_token_data(xml, payment_source, options) if payment_source.is_a?(String)
         payment_source.is_a?(Check) ? add_echeck(xml, payment_source, options) : add_credit_card(xml, payment_source, options)
       end
 
@@ -576,10 +621,10 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_credit_card(xml, credit_card, options)
-        xml.tag! :AccountNum, credit_card.number if credit_card
-        xml.tag! :Exp, expiry_date(credit_card) if credit_card
+        xml.tag! :AccountNum, credit_card.number if credit_card.is_a?(CreditCard)
+        xml.tag! :Exp, expiry_date(credit_card) if credit_card.is_a?(CreditCard)
         add_currency_fields(xml, options[:currency])
-        add_verification_value(xml, credit_card) if credit_card
+        add_verification_value(xml, credit_card) if credit_card.is_a?(CreditCard)
       end
 
       def add_verification_value(xml, credit_card)
@@ -679,7 +724,7 @@ module ActiveMerchant #:nodoc:
         add_mc_sca_recurring(xml, credit_card, parameters, three_d_secure)
         add_mc_program_protocol(xml, credit_card, three_d_secure)
         add_mc_directory_trans_id(xml, credit_card, three_d_secure)
-        add_mc_ucafind(xml, credit_card, three_d_secure)
+        add_mc_ucafind(xml, credit_card, three_d_secure, parameters)
       end
 
       def add_mc_sca_merchant_initiated(xml, credit_card, parameters, three_d_secure)
@@ -708,10 +753,16 @@ module ActiveMerchant #:nodoc:
         xml.tag!(:MCDirectoryTransID, three_d_secure[:ds_transaction_id]) if three_d_secure[:ds_transaction_id]
       end
 
-      def add_mc_ucafind(xml, credit_card, three_d_secure)
+      def add_mc_ucafind(xml, credit_card, three_d_secure, options)
         return unless three_d_secure
 
-        xml.tag! :UCAFInd, '4'
+        if options[:alternate_ucaf_flow]
+          return unless %w(4 6 7).include?(three_d_secure[:eci])
+
+          xml.tag! :UCAFInd, options[:ucaf_collection_indicator] if options[:ucaf_collection_indicator]
+        else
+          xml.tag! :UCAFInd, options[:ucaf_collection_indicator] || '4'
+        end
       end
 
       #=====SCA (STORED CREDENTIAL) FIELDS=====
@@ -886,13 +937,19 @@ module ActiveMerchant #:nodoc:
             request.call(remote_url(:secondary))
           end
 
-        Response.new(success?(response, message_type), message_from(response), response,
+        authorization = authorization_string(response[:tx_ref_num], response[:order_id], response[:safetech_token], response[:card_brand])
+
+        Response.new(
+          success?(response, message_type),
+          message_from(response),
+          response,
           {
-            authorization: authorization_string(response[:tx_ref_num], response[:order_id]),
+            authorization: authorization,
             test: self.test?,
             avs_result: OrbitalGateway::AVSResult.new(response[:avs_resp_code]),
             cvv_result: OrbitalGateway::CVVResult.new(response[:cvv2_resp_code])
-          })
+          }
+        )
       end
 
       def remote_url(url = :primary)
@@ -981,35 +1038,34 @@ module ActiveMerchant #:nodoc:
             xml.tag! :OrderID, format_order_id(parameters[:order_id])
             xml.tag! :Amount, amount(money)
             xml.tag! :Comments, parameters[:comments] if parameters[:comments]
-
             add_level2_tax(xml, parameters)
             add_level2_advice_addendum(xml, parameters)
-
             add_aav(xml, payment_source, three_d_secure)
             # CustomerAni, AVSPhoneType and AVSDestPhoneType could be added here.
-
             add_soft_descriptors(xml, parameters[:soft_descriptors])
-            add_payment_action_ind(xml, parameters[:payment_action_ind])
-            add_dpanind(xml, payment_source, parameters[:industry_type])
-            add_aevv(xml, payment_source, three_d_secure)
-            add_digital_token_cryptogram(xml, payment_source, three_d_secure)
-
-            xml.tag! :ECPSameDayInd, parameters[:same_day] if parameters[:same_day] && payment_source.is_a?(Check)
-
             set_recurring_ind(xml, parameters)
 
             # Append Transaction Reference Number at the end for Refund transactions
             add_tx_ref_num(xml, parameters[:authorization]) if action == REFUND && payment_source.nil?
-
             add_level2_purchase(xml, parameters)
             add_level3_purchase(xml, parameters)
             add_level3_tax(xml, parameters)
             add_line_items(xml, parameters) if parameters[:line_items]
-            add_ecp_details(xml, payment_source, parameters) if payment_source.is_a?(Check)
             add_card_indicators(xml, parameters)
+            add_payment_action_ind(xml, parameters[:payment_action_ind])
+            add_dpanind(xml, payment_source, parameters[:industry_type])
+            add_aevv(xml, payment_source, three_d_secure)
+            add_level2_card_and_more_tax(xml, parameters)
+            add_digital_token_cryptogram(xml, payment_source, three_d_secure)
+            xml.tag! :ECPSameDayInd, parameters[:same_day] if parameters[:same_day] && payment_source.is_a?(Check)
+            add_ecp_details(xml, payment_source, parameters) if payment_source.is_a?(Check)
+
             add_stored_credentials(xml, parameters)
             add_pymt_brand_program_code(xml, payment_source, three_d_secure)
+            xml.tag! :TokenTxnType, parameters[:token_txn_type] if parameters[:token_txn_type]
             add_mastercard_fields(xml, payment_source, parameters, three_d_secure) if mastercard?(payment_source)
+            add_card_commodity_code(xml, parameters)
+            add_level3_vat_fields(xml, parameters)
           end
         end
         xml.target!
@@ -1031,6 +1087,9 @@ module ActiveMerchant #:nodoc:
             add_level3_purchase(xml, parameters)
             add_level3_tax(xml, parameters)
             add_line_items(xml, parameters) if parameters[:line_items]
+            add_level2_card_and_more_tax(xml, parameters)
+            add_card_commodity_code(xml, parameters)
+            add_level3_vat_fields(xml, parameters)
           end
         end
         xml.target!

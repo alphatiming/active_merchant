@@ -4,7 +4,7 @@ class RemoteDLocalTest < Test::Unit::TestCase
   def setup
     @gateway = DLocalGateway.new(fixtures(:d_local))
 
-    @amount = 200
+    @amount = 1000
     @credit_card = credit_card('4111111111111111')
     @credit_card_naranja = credit_card('5895627823453005')
     @cabal_credit_card = credit_card('5896 5700 0000 0004')
@@ -50,6 +50,12 @@ class RemoteDLocalTest < Test::Unit::TestCase
     assert_match 'The payment was paid', response.message
   end
 
+  def test_successful_purchase_with_ip_and_phone
+    response = @gateway.purchase(@amount, @credit_card, @options.merge(ip: '127.0.0.1'))
+    assert_success response
+    assert_match 'The payment was paid', response.message
+  end
+
   def test_successful_purchase_with_save_option
     response = @gateway.purchase(@amount, @credit_card, @options.merge(save: true))
     assert_success response
@@ -60,26 +66,24 @@ class RemoteDLocalTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_network_tokens
-    credit_card = network_tokenization_credit_card('4242424242424242',
-      payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
+    credit_card = network_tokenization_credit_card('4242424242424242', payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
     response = @gateway.purchase(@amount, credit_card, @options)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
 
   def test_successful_purchase_with_network_tokens_and_store_credential_type
-    credit_card = network_tokenization_credit_card('4242424242424242',
-      payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
-    response = @gateway.purchase(@amount, credit_card, @options.merge!(stored_credential_type: 'SUBSCRIPTION'))
+    options = @options.merge!(stored_credential: stored_credential(:merchant, :recurring, id: 'abc123'))
+    credit_card = network_tokenization_credit_card('4242424242424242', payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
+    response = @gateway.purchase(@amount, credit_card, options)
     assert_success response
     assert_match 'SUBSCRIPTION', response.params['card']['stored_credential_type']
     assert_match 'The payment was paid', response.message
   end
 
   def test_successful_purchase_with_network_tokens_and_store_credential_usage
-    options = @options.merge!(stored_credential: stored_credential(:merchant, :recurring, ntid: 'abc123'))
-    credit_card = network_tokenization_credit_card('4242424242424242',
-      payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
+    options = @options.merge!(stored_credential: stored_credential(:merchant, :recurring, id: 'abc123'))
+    credit_card = network_tokenization_credit_card('4242424242424242', payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
     response = @gateway.purchase(@amount, credit_card, options)
     assert_success response
     assert_match 'USED', response.params['card']['stored_credential_usage']
@@ -87,13 +91,13 @@ class RemoteDLocalTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_installments
-    response = @gateway.purchase(@amount, @credit_card, @options_argentina_installments)
+    response = @gateway.purchase(@amount * 50, @credit_card, @options_argentina_installments)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
 
   def test_successful_purchase_naranja
-    response = @gateway.purchase(@amount, @credit_card_naranja, @options)
+    response = @gateway.purchase(@amount * 50, @credit_card_naranja, @options_argentina)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
@@ -164,9 +168,9 @@ class RemoteDLocalTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_with_force_type_debit
-    options = @options.merge(force_type: 'DEBIT')
+    options = @options_argentina.merge(force_type: 'DEBIT')
 
-    response = @gateway.purchase(@amount, @credit_card, options)
+    response = @gateway.purchase(@amount * 50, @credit_card, options)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
@@ -179,13 +183,13 @@ class RemoteDLocalTest < Test::Unit::TestCase
   end
 
   def test_successful_purchase_argentina
-    response = @gateway.purchase(@amount, @credit_card, @options_argentina)
+    response = @gateway.purchase(@amount * 50, @credit_card, @options_argentina)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
 
   def test_successful_purchase_mexico
-    response = @gateway.purchase(@amount, @credit_card, @options_mexico)
+    response = @gateway.purchase(@amount, @cabal_credit_card, @options_mexico)
     assert_success response
     assert_match 'The payment was paid', response.message
   end
@@ -209,8 +213,10 @@ class RemoteDLocalTest < Test::Unit::TestCase
   end
 
   def test_failed_purchase_with_network_tokens
-    credit_card = network_tokenization_credit_card('4242424242424242',
-      payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA=')
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
+      payment_cryptogram: 'BwABB4JRdgAAAAAAiFF2AAAAAAA='
+    )
     response = @gateway.purchase(@amount, credit_card, @options.merge(description: '300'))
     assert_failure response
     assert_match 'The payment was rejected', response.message

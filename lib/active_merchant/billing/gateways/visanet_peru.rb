@@ -143,12 +143,12 @@ module ActiveMerchant #:nodoc:
       end
 
       def generate_purchase_number_stamp
-        Time.now.to_f.to_s.delete('.')[1..10] + rand(99).to_s
+        rand(('9' * 12).to_i).to_s.center(12, rand(9).to_s)
       end
 
       def commit(action, params, options = {})
         raw_response = ssl_request(method(action), url(action, params, options), params.to_json, headers)
-        response = parse(raw_response)
+        response = parse(raw_response).merge('purchaseNumber' => params[:purchaseNumber])
       rescue ResponseError => e
         raw_response = e.response.body
         response_error(raw_response, options, action)

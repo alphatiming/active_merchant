@@ -835,6 +835,19 @@ class StripeTest < Test::Unit::TestCase
     assert_equal 'ch_test_charge', response.authorization
   end
 
+  def test_declined_request_returns_header_response
+    @gateway.instance_variable_set(:@response_headers, { 'idempotent-replayed' => 'true' })
+    @gateway.expects(:ssl_request).returns(declined_purchase_response)
+
+    assert response = @gateway.purchase(@amount, @credit_card, @options)
+    assert_failure response
+
+    assert_equal Gateway::STANDARD_ERROR_CODE[:card_declined], response.error_code
+    refute response.test? # unsuccessful request defaults to live
+    assert_equal 'ch_test_charge', response.authorization
+    assert response.params['response_headers']['idempotent_replayed'], 'true'
+  end
+
   def test_declined_request_advanced_decline_codes
     @gateway.expects(:ssl_request).returns(declined_call_issuer_purchase_response)
 
@@ -966,10 +979,12 @@ class StripeTest < Test::Unit::TestCase
 
   def test_add_creditcard_pads_eci_value
     post = {}
-    credit_card = network_tokenization_credit_card('4242424242424242',
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
       payment_cryptogram: '111111111100cryptogram',
       verification_value: nil,
-      eci: '7')
+      eci: '7'
+    )
 
     @gateway.send(:add_creditcard, post, credit_card, {})
 
@@ -1440,10 +1455,12 @@ class StripeTest < Test::Unit::TestCase
       true
     end.returns(successful_authorization_response)
 
-    credit_card = network_tokenization_credit_card('4242424242424242',
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
       payment_cryptogram: '111111111100cryptogram',
       verification_value: nil,
-      eci: '05')
+      eci: '05'
+    )
 
     assert response = @gateway.authorize(@amount, credit_card, @options)
     assert_instance_of Response, response
@@ -1460,11 +1477,13 @@ class StripeTest < Test::Unit::TestCase
       true
     end.returns(successful_authorization_response)
 
-    credit_card = network_tokenization_credit_card('4242424242424242',
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
       payment_cryptogram: '111111111100cryptogram',
       verification_value: nil,
       eci: '05',
-      source: :android_pay)
+      source: :android_pay
+    )
 
     assert response = @gateway.authorize(@amount, credit_card, @options)
     assert_instance_of Response, response
@@ -1481,10 +1500,12 @@ class StripeTest < Test::Unit::TestCase
       true
     end.returns(successful_authorization_response)
 
-    credit_card = network_tokenization_credit_card('4242424242424242',
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
       payment_cryptogram: '111111111100cryptogram',
       verification_value: nil,
-      eci: '05')
+      eci: '05'
+    )
 
     assert response = @gateway.purchase(@amount, credit_card, @options)
     assert_instance_of Response, response
@@ -1501,11 +1522,13 @@ class StripeTest < Test::Unit::TestCase
       true
     end.returns(successful_authorization_response)
 
-    credit_card = network_tokenization_credit_card('4242424242424242',
+    credit_card = network_tokenization_credit_card(
+      '4242424242424242',
       payment_cryptogram: '111111111100cryptogram',
       verification_value: nil,
       eci: '05',
-      source: :android_pay)
+      source: :android_pay
+    )
 
     assert response = @gateway.purchase(@amount, credit_card, @options)
     assert_instance_of Response, response

@@ -18,10 +18,10 @@ module ActiveMerchant #:nodoc:
         "https://payments#{'.sandbox' if sandbox}.braintree-api.com/graphql"
       end
 
-      def create_token_nonce_for_payment_method(payment_method)
+      def create_token_nonce_for_payment_method(payment_method, options = {})
         headers = {
           'Accept' => 'application/json',
-          'Authorization' => "Bearer #{client_token}",
+          'Authorization' => "Bearer #{client_token(options)['authorizationFingerprint']}",
           'Content-Type' => 'application/json',
           'Braintree-Version' => '2018-05-10'
         }
@@ -29,19 +29,19 @@ module ActiveMerchant #:nodoc:
         json_response = JSON.parse(resp)
 
         message = json_response['errors'].map { |err| err['message'] }.join("\n") if json_response['errors'].present?
-        token = json_response.dig('data', 'tokenizeUsBankAccount', 'paymentMethod', 'id')
+        token = token_from(payment_method, json_response)
 
         return token, message
       end
 
-      def client_token
-        base64_token = @braintree_gateway.client_token.generate
-        JSON.parse(Base64.decode64(base64_token))['authorizationFingerprint']
+      def client_token(options = {})
+        base64_token = @braintree_gateway.client_token.generate({ merchant_account_id: options[:merchant_account_id] || @options[:merchant_account_id] }.compact)
+        JSON.parse(Base64.decode64(base64_token))
       end
 
       private
 
-      def graphql_query
+      def graphql_bank_query
         <<-GRAPHQL
         mutation TokenizeUsBankAccount($input: TokenizeUsBankAccountInput!) {
           tokenizeUsBankAccount(input: $input) {
@@ -49,6 +49,23 @@ module ActiveMerchant #:nodoc:
               id
               details {
                 ... on UsBankAccountDetails {
+                  last4
+                }
+              }
+            }
+          }
+        }
+        GRAPHQL
+      end
+
+      def graphql_credit_query
+        <<-GRAPHQL
+        mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) {
+          tokenizeCreditCard(input: $input) {
+            paymentMethod {
+              id
+              details {
+                ... on CreditCardDetails {
                   last4
                 }
               }
@@ -72,7 +89,42 @@ module ActiveMerchant #:nodoc:
         }.compact
       end
 
+      def build_nonce_credit_card_request(payment_method)
+        billing_address = billing_address_from_options
+        key_replacements = { city: :locality, state: :region, zipCode: :postalCode }
+        billing_address&.transform_keys! { |key| key_replacements[key] || key }
+        {
+          creditCard: {
+            number: payment_method.number,
+            expirationYear: payment_method.year.to_s,
+            expirationMonth: payment_method.month.to_s.rjust(2, '0'),
+            cvv: payment_method.verification_value,
+            cardholderName: payment_method.name,
+            billingAddress: billing_address
+          }
+        }
+      end
+
       def build_nonce_request(payment_method)
+        input = payment_method.is_a?(Check) ? build_nonce_bank_request(payment_method) : build_nonce_credit_card_request(payment_method)
+        graphql_query = payment_method.is_a?(Check) ? graphql_bank_query : graphql_credit_query
+
+        {
+          clientSdkMetadata: {
+            platform: 'web',
+            source: 'client',
+            integration: 'custom',
+            sessionId: SecureRandom.uuid,
+            version: '3.83.0'
+          },
+           query: graphql_query,
+           variables: {
+             input: input
+           }
+        }.to_json
+      end
+
+      def build_nonce_bank_request(payment_method)
         input = {
           usBankAccount: {
             achMandate: options[:ach_mandate],
@@ -94,19 +146,12 @@ module ActiveMerchant #:nodoc:
           }
         end
 
-        {
-          clientSdkMetadata: {
-            platform: 'web',
-            source: 'client',
-            integration: 'custom',
-            sessionId: SecureRandom.uuid,
-            version: '3.83.0'
-          },
-          query: graphql_query,
-          variables: {
-            input: input
-          }
-        }.to_json
+        input
+      end
+
+      def token_from(payment_method, response)
+        tokenized_field = payment_method.is_a?(Check) ? 'tokenizeUsBankAccount' : 'tokenizeCreditCard'
+        response.dig('data', tokenized_field, 'paymentMethod', 'id')
       end
     end
   end

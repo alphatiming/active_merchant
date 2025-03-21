@@ -29,6 +29,52 @@ class NmiTest < Test::Unit::TestCase
       descriptor_merchant_id: '120',
       descriptor_url: 'url'
     }
+
+    @google_pay = network_tokenization_credit_card(
+      '4111111111111111',
+      brand: 'visa',
+      eci: '05',
+      month: '02',
+      year: '2035',
+      source: :google_pay,
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      transaction_id: '13456789'
+    )
+
+    @apple_pay = network_tokenization_credit_card(
+      '4111111111111111',
+      brand: 'visa',
+      eci: '05',
+      month: '02',
+      year: '2035',
+      source: :apple_pay,
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      transaction_id: '13456789'
+    )
+  end
+
+  def test_successful_apple_pay_purchase
+    stub_comms do
+      @gateway.purchase(@amount, @apple_pay)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/type=sale/, data)
+      assert_match(/ccnumber=4111111111111111/, data)
+      assert_match(/ccexp=#{sprintf("%.2i", @apple_pay.month)}#{@apple_pay.year.to_s[-2..-1]}/, data)
+      assert_match(/cavv=EHuWW9PiBkWvqE5juRwDzAUFBAk%3D/, data)
+      assert_match(/eci=05/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_successful_google_pay_purchase
+    stub_comms do
+      @gateway.purchase(@amount, @google_pay)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/type=sale/, data)
+      assert_match(/ccnumber=4111111111111111/, data)
+      assert_match(/ccexp=#{sprintf("%.2i", @google_pay.month)}#{@google_pay.year.to_s[-2..-1]}/, data)
+      assert_match(/cavv=EHuWW9PiBkWvqE5juRwDzAUFBAk%3D/, data)
+      assert_match(/eci=05/, data)
+    end.respond_with(successful_purchase_response)
   end
 
   def test_successful_authorize_and_capture_using_security_key
@@ -588,8 +634,7 @@ class NmiTest < Test::Unit::TestCase
   end
 
   def test_supported_countries
-    assert_equal 1,
-      (['US'] | NmiGateway.supported_countries).size
+    assert_equal 2, (%w[US CA] | NmiGateway.supported_countries).size
   end
 
   def test_supported_card_types
@@ -653,6 +698,21 @@ class NmiTest < Test::Unit::TestCase
       assert_match(/stored_credential_indicator=used/, data)
       assert_match(/billing_method=recurring/, data)
       assert_match(/initial_transaction_id=abc123/, data)
+    end.respond_with(successful_authorization_response)
+
+    assert_success response
+  end
+
+  def test_stored_credential_ntid_override_recurring_mit_used
+    options = stored_credential_options(:merchant, :recurring)
+    options[:network_transaction_id] = 'test123'
+    response = stub_comms do
+      @gateway.authorize(@amount, @credit_card, options)
+    end.check_request do |_endpoint, data, _headers|
+      assert_match(/initiated_by=merchant/, data)
+      assert_match(/stored_credential_indicator=used/, data)
+      assert_match(/billing_method=recurring/, data)
+      assert_match(/initial_transaction_id=test123/, data)
     end.respond_with(successful_authorization_response)
 
     assert_success response
@@ -824,8 +884,7 @@ class NmiTest < Test::Unit::TestCase
       assert_match(/payment=creditcard/, data)
       assert_match(/ccnumber=#{@credit_card.number}/, data)
       assert_match(/cvv=#{@credit_card.verification_value}/, data)
-      assert_match(/ccexp=#{sprintf("%.2i", @credit_card.month)}#{@credit_card.year.to_s[-2..-1]}/,
-        data)
+      assert_match(/ccexp=#{sprintf("%.2i", @credit_card.month)}#{@credit_card.year.to_s[-2..-1]}/, data)
 
       test_level3_options(data) if options.any?
     end.respond_with(successful_validate_response)

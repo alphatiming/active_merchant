@@ -38,14 +38,14 @@ module ActiveMerchant #:nodoc:
         'G' => 'C', # Address does not match, postcode not checked
         'H' => 'I', # Address and postcode not provided
         'I' => 'C', # Address not checked postcode does not match
-        'J' => 'C', # Address and postcode does not match
+        'J' => 'C' # Address and postcode does not match
       }
 
       CVC_CODE_MAP = {
         'A' => 'M', # CVV matches
         'B' => 'P', # Not provided
         'C' => 'P', # Not checked
-        'D' => 'N', # Does not match
+        'D' => 'N' # Does not match
       }
 
       def initialize(options = {})
@@ -62,7 +62,7 @@ module ActiveMerchant #:nodoc:
 
       def authorize(money, payment_method, options = {})
         requires!(options, :order_id)
-        payment_details = payment_details(payment_method)
+        payment_details = payment_details(payment_method, options)
         authorize_request(money, payment_method, payment_details.merge(options))
       end
 
@@ -108,9 +108,11 @@ module ActiveMerchant #:nodoc:
       #   and other transactions should be performed on a normal eCom-flagged
       #   merchant ID.
       def credit(money, payment_method, options = {})
-        payment_details = payment_details(payment_method)
+        payment_details = payment_details(payment_method, options)
         if options[:fast_fund_credit]
           fast_fund_credit_request(money, payment_method, payment_details.merge(credit: true, **options))
+        elsif options[:account_funding_transaction]
+          aft_request(money, payment_method, payment_details.merge(**options))
         else
           credit_request(money, payment_method, payment_details.merge(credit: true, **options))
         end
@@ -148,10 +150,19 @@ module ActiveMerchant #:nodoc:
           gsub(%r((<cardNumber>)\d+(</cardNumber>)), '\1[FILTERED]\2').
           gsub(%r((<cvc>)[^<]+(</cvc>)), '\1[FILTERED]\2').
           gsub(%r((<tokenNumber>)\d+(</tokenNumber>)), '\1[FILTERED]\2').
-          gsub(%r((<cryptogram>)[^<]+(</cryptogram>)), '\1[FILTERED]\2')
+          gsub(%r((<cryptogram>)[^<]+(</cryptogram>)), '\1[FILTERED]\2').
+          gsub(%r((<accountReference accountType="\w+">)\d+(<\/accountReference>)), '\1[FILTERED]\2')
       end
 
       private
+
+      def eci_value(payment_method, options)
+        eci = payment_method.respond_to?(:eci) ? format(payment_method.eci, :two_digits) : ''
+
+        return eci unless eci.empty?
+
+        options[:use_default_eci] ? '07' : eci
+      end
 
       def authorize_request(money, payment_method, options)
         commit('authorize', build_authorization_request(money, payment_method, options), 'AUTHORISED', 'CAPTURED', options)
@@ -179,6 +190,10 @@ module ActiveMerchant #:nodoc:
 
       def fast_fund_credit_request(money, payment_method, options)
         commit('fast_credit', build_fast_fund_credit_request(money, payment_method, options), :ok, 'PUSH_APPROVED', options)
+      end
+
+      def aft_request(money, payment_method, options)
+        commit('funding_transfer_transaction', build_aft_request(money, payment_method, options), :ok, 'AUTHORISED', options)
       end
 
       def store_request(credit_card, options)
@@ -252,9 +267,8 @@ module ActiveMerchant #:nodoc:
         xml.invoiceReferenceNumber data[:invoice_reference_number] if data.include?(:invoice_reference_number)
         xml.customerReference data[:customer_reference] if data.include?(:customer_reference)
         xml.cardAcceptorTaxId data[:card_acceptor_tax_id] if data.include?(:card_acceptor_tax_id)
-
         {
-          sales_tax: 'salesTax',
+          tax_amount: 'salesTax',
           discount_amount: 'discountAmount',
           shipping_amount: 'shippingAmount',
           duty_amount: 'dutyAmount'
@@ -262,53 +276,37 @@ module ActiveMerchant #:nodoc:
           next unless data.include?(key)
 
           xml.tag! tag do
-            data_amount = data[key].symbolize_keys
-            add_amount(xml, data_amount[:amount].to_i, data_amount)
+            add_amount(xml, data[key].to_i, data)
           end
-        end
-
-        xml.discountName data[:discount_name] if data.include?(:discount_name)
-        xml.discountCode data[:discount_code] if data.include?(:discount_code)
-
-        add_date_element(xml, 'shippingDate', data[:shipping_date]) if data.include?(:shipping_date)
-
-        if data.include?(:shipping_courier)
-          xml.shippingCourier(
-            data[:shipping_courier][:priority],
-            data[:shipping_courier][:tracking_number],
-            data[:shipping_courier][:name]
-          )
         end
 
         add_optional_data_level_two_and_three(xml, data)
 
-        if data.include?(:item) && data[:item].kind_of?(Array)
-          data[:item].each { |item| add_items_into_level_three_data(xml, item.symbolize_keys) }
-        elsif data.include?(:item)
-          add_items_into_level_three_data(xml, data[:item].symbolize_keys)
-        end
+        data[:line_items].each { |item| add_line_items_into_level_three_data(xml, item.symbolize_keys, data) } if data.include?(:line_items)
       end
 
-      def add_items_into_level_three_data(xml, item)
+      def add_line_items_into_level_three_data(xml, item, data)
         xml.item do
           xml.description item[:description] if item[:description]
           xml.productCode item[:product_code] if item[:product_code]
           xml.commodityCode item[:commodity_code] if item[:commodity_code]
           xml.quantity item[:quantity] if item[:quantity]
-
-          {
-            unit_cost: 'unitCost',
-            item_total: 'itemTotal',
-            item_total_with_tax: 'itemTotalWithTax',
-            item_discount_amount: 'itemDiscountAmount',
-            tax_amount: 'taxAmount'
-          }.each do |key, tag|
-            next unless item.include?(key)
-
-            xml.tag! tag do
-              data_amount = item[key].symbolize_keys
-              add_amount(xml, data_amount[:amount].to_i, data_amount)
-            end
+          xml.unitCost do
+            add_amount(xml, item[:unit_cost], data)
+          end
+          xml.unitOfMeasure item[:unit_of_measure] || 'each'
+          xml.itemTotal do
+            sub_total_amount = item[:quantity].to_i * (item[:unit_cost].to_i - item[:discount_amount].to_i)
+            add_amount(xml, sub_total_amount, data)
+          end
+          xml.itemTotalWithTax do
+            add_amount(xml, item[:total_amount], data)
+          end
+          xml.itemDiscountAmount do
+            add_amount(xml, item[:discount_amount], data)
+          end
+          xml.taxAmount do
+            add_amount(xml, item[:tax_amount], data)
           end
         end
       end
@@ -318,7 +316,7 @@ module ActiveMerchant #:nodoc:
         xml.destinationPostalCode data[:destination_postal_code] if data.include?(:destination_postal_code)
         xml.destinationCountryCode data[:destination_country_code] if data.include?(:destination_country_code)
         add_date_element(xml, 'orderDate', data[:order_date].symbolize_keys) if data.include?(:order_date)
-        xml.taxExempt data[:tax_exempt] if data.include?(:tax_exempt)
+        xml.taxExempt data[:tax_amount].to_i > 0 ? 'false' : 'true'
       end
 
       def order_tag_attributes(options)
@@ -409,6 +407,66 @@ module ActiveMerchant #:nodoc:
         end
       end
 
+      def build_aft_request(money, payment_method, options)
+        build_request do |xml|
+          xml.submit do
+            xml.order order_tag_attributes(options) do
+              xml.description(options[:description].blank? ? 'Account Funding Transaction' : options[:description])
+              add_amount(xml, money, options)
+              add_order_content(xml, options)
+              add_payment_method(xml, money, payment_method, options)
+              add_shopper(xml, options)
+              add_sub_merchant_data(xml, options[:sub_merchant_data]) if options[:sub_merchant_data]
+              add_aft_data(xml, payment_method, options)
+            end
+          end
+        end
+      end
+
+      def add_aft_data(xml, payment_method, options)
+        xml.fundingTransfer 'type' => options[:aft_type], 'category' => 'PULL_FROM_CARD' do
+          xml.paymentPurpose options[:aft_payment_purpose] # Must be included for the recipient for following countries, otherwise optional: Argentina, Bangladesh, Chile, Columbia, Jordan, Mexico, Thailand, UAE, India cross-border
+          xml.fundingParty 'type' => 'sender' do
+            xml.accountReference options[:aft_sender_account_reference], 'accountType' => options[:aft_sender_account_type]
+            xml.fullName do
+              xml.first options.dig(:aft_sender_full_name, :first)
+              xml.middle options.dig(:aft_sender_full_name, :middle)
+              xml.last options.dig(:aft_sender_full_name, :last)
+            end
+            xml.fundingAddress do
+              xml.address1 options.dig(:aft_sender_funding_address, :address1)
+              xml.address2 options.dig(:aft_sender_funding_address, :address2)
+              xml.postalCode options.dig(:aft_sender_funding_address, :postal_code)
+              xml.city options.dig(:aft_sender_funding_address, :city)
+              xml.state options.dig(:aft_sender_funding_address, :state)
+              xml.countryCode options.dig(:aft_sender_funding_address, :country_code)
+            end
+          end
+          xml.fundingParty 'type' => 'recipient' do
+            xml.accountReference options[:aft_recipient_account_reference], 'accountType' => options[:aft_recipient_account_type]
+            xml.fullName do
+              xml.first options.dig(:aft_recipient_full_name, :first)
+              xml.middle options.dig(:aft_recipient_full_name, :middle)
+              xml.last options.dig(:aft_recipient_full_name, :last)
+            end
+            xml.fundingAddress do
+              xml.address1 options.dig(:aft_recipient_funding_address, :address1)
+              xml.address2 options.dig(:aft_recipient_funding_address, :address2)
+              xml.postalCode options.dig(:aft_recipient_funding_address, :postal_code)
+              xml.city options.dig(:aft_recipient_funding_address, :city)
+              xml.state options.dig(:aft_recipient_funding_address, :state)
+              xml.countryCode options.dig(:aft_recipient_funding_address, :country_code)
+            end
+            if options[:aft_recipient_funding_data]
+              xml.fundingData do
+                add_date_element(xml, 'birthDate', options[:aft_recipient_funding_data][:birth_date])
+                xml.telephoneNumber options.dig(:aft_recipient_funding_data, :telephone_number)
+              end
+            end
+          end
+        end
+      end
+
       def add_payment_details_for_ff_credit(xml, payment_method, options)
         xml.paymentDetails do
           xml.tag! 'FF_DISBURSE-SSL' do
@@ -443,7 +501,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_additional_3ds_data(xml, options)
-        additional_data = { 'dfReferenceId' => options[:session_id] }
+        additional_data = { 'dfReferenceId' => options[:df_reference_id] }
         additional_data['challengeWindowSize'] = options[:browser_size] if options[:browser_size]
 
         xml.additional3DSData additional_data
@@ -554,10 +612,10 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_amount(xml, money, options)
-        currency = options[:currency] || currency(money)
+        currency = options[:currency] || currency(money.to_i)
 
         amount_hash = {
-          :value => localized_amount(money, currency),
+          :value => localized_amount(money.to_i, currency),
           'currencyCode' => currency,
           'exponent' => currency_exponent(currency)
         }
@@ -572,7 +630,7 @@ module ActiveMerchant #:nodoc:
         when :pay_as_order
           add_amount_for_pay_as_order(xml, amount, payment_method, options)
         when :network_token
-          add_network_tokenization_card(xml, payment_method)
+          add_network_tokenization_card(xml, payment_method, options)
         else
           add_card_or_token(xml, payment_method, options)
         end
@@ -590,8 +648,9 @@ module ActiveMerchant #:nodoc:
         end
       end
 
-      def add_network_tokenization_card(xml, payment_method)
-        token_type = NETWORK_TOKEN_TYPE.fetch(payment_method.source, 'NETWORKTOKEN')
+      def add_network_tokenization_card(xml, payment_method, options)
+        source = payment_method.respond_to?(:source) ? payment_method.source : options[:wallet_type]
+        token_type = NETWORK_TOKEN_TYPE.fetch(source, 'NETWORKTOKEN')
 
         xml.paymentDetails do
           xml.tag! 'EMVCO_TOKEN-SSL', 'type' => token_type do
@@ -603,11 +662,12 @@ module ActiveMerchant #:nodoc:
               )
             end
             name = card_holder_name(payment_method, options)
-            eci = format(payment_method.eci, :two_digits)
             xml.cardHolderName name if name.present?
-            xml.cryptogram payment_method.payment_cryptogram
-            xml.eciIndicator eci.empty? ? '07' : eci
+            xml.cryptogram payment_method.payment_cryptogram unless options[:wallet_type] == :google_pay
+            eci = eci_value(payment_method, options)
+            xml.eciIndicator eci if eci.present?
           end
+          add_stored_credential_options(xml, options)
         end
       end
 
@@ -684,30 +744,27 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_stored_credential_using_normalized_fields(xml, options)
-        if options[:stored_credential][:initial_transaction]
-          xml.storedCredentials 'usage' => 'FIRST'
-        else
-          reason = case options[:stored_credential][:reason_type]
-                   when 'installment' then 'INSTALMENT'
-                   when 'recurring' then 'RECURRING'
-                   when 'unscheduled' then 'UNSCHEDULED'
-                   end
+        reason = case options[:stored_credential][:reason_type]
+                 when 'installment' then 'INSTALMENT'
+                 when 'recurring' then 'RECURRING'
+                 when 'unscheduled' then 'UNSCHEDULED'
+                 end
+        is_initial_transaction = options[:stored_credential][:initial_transaction]
+        stored_credential_params = generate_stored_credential_params(is_initial_transaction, reason)
 
-          xml.storedCredentials 'usage' => 'USED', 'merchantInitiatedReason' => reason do
-            xml.schemeTransactionIdentifier options[:stored_credential][:network_transaction_id] if options[:stored_credential][:network_transaction_id]
-          end
+        xml.storedCredentials stored_credential_params do
+          xml.schemeTransactionIdentifier network_transaction_id(options) if network_transaction_id(options) && !is_initial_transaction
         end
       end
 
       def add_stored_credential_using_gateway_specific_fields(xml, options)
         return unless options[:stored_credential_usage]
 
-        if options[:stored_credential_initiated_reason]
-          xml.storedCredentials 'usage' => options[:stored_credential_usage], 'merchantInitiatedReason' => options[:stored_credential_initiated_reason] do
-            xml.schemeTransactionIdentifier options[:stored_credential_transaction_id] if options[:stored_credential_transaction_id]
-          end
-        else
-          xml.storedCredentials 'usage' => options[:stored_credential_usage]
+        is_initial_transaction = options[:stored_credential_usage] == 'FIRST'
+        stored_credential_params = generate_stored_credential_params(is_initial_transaction, options[:stored_credential_initiated_reason])
+
+        xml.storedCredentials stored_credential_params do
+          xml.schemeTransactionIdentifier options[:stored_credential_transaction_id] if options[:stored_credential_transaction_id] && !is_initial_transaction
         end
       end
 
@@ -832,7 +889,8 @@ module ActiveMerchant #:nodoc:
 
         # ensure cookie included on follow-up '3ds' and 'capture_request' calls, using the cookie saved from the preceding response
         # cookie should be present in options on the 3ds and capture calls, but also still saved in the instance var in case
-        cookie = options[:cookie] || @cookie || nil
+        cookie = defined?(@cookie) ? @cookie : nil
+        cookie = options[:cookie] || cookie
         headers['Cookie'] = cookie if cookie
 
         headers['Idempotency-Key'] = idempotency_key if idempotency_key
@@ -977,12 +1035,12 @@ module ActiveMerchant #:nodoc:
         token_details
       end
 
-      def payment_details(payment_method)
+      def payment_details(payment_method, options = {})
         case payment_method
         when String
           token_type_and_details(payment_method)
         else
-          type = network_token?(payment_method) ? :network_token : :credit
+          type = network_token?(payment_method) || options[:wallet_type] == :google_pay ? :network_token : :credit
 
           { payment_type: type }
         end
@@ -1025,6 +1083,15 @@ module ActiveMerchant #:nodoc:
 
       def card_holder_name(payment_method, options)
         test? && options[:execute_threed] && !options[:three_ds_version]&.start_with?('2') ? '3D' : payment_method.name
+      end
+
+      def generate_stored_credential_params(is_initial_transaction, reason = nil)
+        customer_or_merchant = reason == 'RECURRING' && is_initial_transaction ? 'customerInitiatedReason' : 'merchantInitiatedReason'
+
+        stored_credential_params = {}
+        stored_credential_params['usage'] = is_initial_transaction ? 'FIRST' : 'USED'
+        stored_credential_params[customer_or_merchant] = reason if reason
+        stored_credential_params
       end
     end
   end

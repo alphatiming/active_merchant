@@ -44,7 +44,7 @@ module ActiveMerchant #:nodoc:
       def initialize(options = {})
         requires!(options, :client_id, :client_secret)
         super
-        @access_token = {}
+        @access_token = options[:access_token] || {}
         sign_access_token()
       end
 
@@ -280,12 +280,12 @@ module ActiveMerchant #:nodoc:
       def commit(action, parameters, url_params = {})
         begin
           response = JSON.parse ssl_post(url(action, url_params), post_data(parameters), authorized_headers())
-        rescue ResponseError => exception
-          case exception.response.code.to_i
+        rescue ResponseError => e
+          case e.response.code.to_i
           when 400...499
-            response = JSON.parse exception.response.body
+            response = JSON.parse e.response.body
           else
-            raise exception
+            raise e
           end
         end
 
@@ -318,7 +318,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def url(action, url_params)
-        "#{(test? ? test_url : live_url)}/#{url_params[:token_acquirer]}/#{action}"
+        "#{test? ? test_url : live_url}/#{url_params[:token_acquirer]}/#{action}"
       end
 
       def post_data(data = {})
@@ -356,12 +356,18 @@ module ActiveMerchant #:nodoc:
         login_info[:client_secret] = @options[:client_secret]
         login_info[:audience] = test? ? test_audience : live_audience
         login_info[:grant_type] = 'client_credentials'
-        response = parse(ssl_post(auth_url(), login_info.to_json, {
-          'content-Type' => 'application/json'
-        }))
 
-        @access_token[:access_token] = response['access_token']
-        @access_token[:expires_at] = Time.new.to_i + response['expires_in']
+        begin
+          raw_response = ssl_post(auth_url(), login_info.to_json, {
+            'content-Type' => 'application/json'
+          })
+        rescue ResponseError => e
+          raise OAuthResponseError.new(e)
+        else
+          response = parse(raw_response)
+          @access_token[:access_token] = response['access_token']
+          @access_token[:expires_at] = Time.new.to_i + response['expires_in']
+        end
       end
     end
   end

@@ -29,9 +29,10 @@ class CreditCardMethodsTest < Test::Unit::TestCase
     %w[500032 500057 501015 501016 501018 501020 501021 501023 501024 501025 501026 501027 501028 501029
        501038 501039 501040 501041 501043 501045 501047 501049 501051 501053 501054 501055 501056 501057
        501058 501060 501061 501062 501063 501066 501067 501072 501075 501083 501087 501623
-       501800 501089 501091 501092 501095 501104 501105 501107 501108 501500 501879
+       501800 501089 501091 501092 501095 501104 501105 501107 501108 501109 501500 501879
        502000 502113 502301 503175 503645 503800
        503670 504310 504338 504363 504533 504587 504620 504639 504656 504738 504781 504910
+       505616
        507001 507002 507004 507082 507090 560014 560565 561033 572402 572610 572626 576904 578614
        585274 585697 586509 588729 588792 589244 589300 589407 589471 589605 589633 589647 589671
        590043 590206 590263 590265
@@ -172,8 +173,24 @@ class CreditCardMethodsTest < Test::Unit::TestCase
     assert_equal 'forbrugsforeningen', CreditCard.brand?('6007221000000000')
   end
 
-  def test_should_detect_sodexo_card
+  def test_should_detect_sodexo_card_with_six_digits
     assert_equal 'sodexo', CreditCard.brand?('6060694495764400')
+    assert_equal 'sodexo', CreditCard.brand?('6060714495764400')
+    assert_equal 'sodexo', CreditCard.brand?('6033894495764400')
+    assert_equal 'sodexo', CreditCard.brand?('6060704495764400')
+    assert_equal 'sodexo', CreditCard.brand?('6060684495764400')
+    assert_equal 'sodexo', CreditCard.brand?('6008184495764400')
+    assert_equal 'sodexo', CreditCard.brand?('5058644495764400')
+    assert_equal 'sodexo', CreditCard.brand?('5058654495764400')
+  end
+
+  def test_should_detect_sodexo_card_with_eight_digits
+    assert_equal 'sodexo', CreditCard.brand?('6060760195764400')
+    assert_equal 'sodexo', CreditCard.brand?('6060760795764400')
+    assert_equal 'sodexo', CreditCard.brand?('6089440095764400')
+    assert_equal 'sodexo', CreditCard.brand?('6089441095764400')
+    assert_equal 'sodexo', CreditCard.brand?('6089442095764400')
+    assert_equal 'sodexo', CreditCard.brand?('6060760695764400')
   end
 
   def test_should_detect_alia_card
@@ -363,6 +380,7 @@ class CreditCardMethodsTest < Test::Unit::TestCase
     assert_equal 'cabal', CreditCard.brand?('6035224400000000')
     assert_equal 'cabal', CreditCard.brand?('6502723300000000')
     assert_equal 'cabal', CreditCard.brand?('6500870000000000')
+    assert_equal 'cabal', CreditCard.brand?('6509000000000000')
   end
 
   def test_should_detect_unionpay_card
@@ -374,6 +392,7 @@ class CreditCardMethodsTest < Test::Unit::TestCase
     assert_equal 'unionpay', CreditCard.brand?('8171999927660000')
     assert_equal 'unionpay', CreditCard.brand?('8171999900000000021')
     assert_equal 'unionpay', CreditCard.brand?('6200000000000005')
+    assert_equal 'unionpay', CreditCard.brand?('6217857000000000')
   end
 
   def test_should_detect_synchrony_card
@@ -385,6 +404,7 @@ class CreditCardMethodsTest < Test::Unit::TestCase
     assert_equal 'routex', CreditCard.brand?(number)
     assert CreditCard.valid_number?(number)
     assert_equal 'routex', CreditCard.brand?('7006789224703725591')
+    assert_equal 'routex', CreditCard.brand?('7006740000000000013')
   end
 
   def test_should_detect_when_an_argument_brand_does_not_match_calculated_brand
@@ -504,6 +524,70 @@ class CreditCardMethodsTest < Test::Unit::TestCase
 
   def test_should_detect_panal_card
     assert_equal 'panal', CreditCard.brand?('6020490000000000')
+  end
+
+  def test_detecting_full_range_of_verve_card_numbers
+    verve = '506099000000000'
+
+    assert_equal 15, verve.length
+    assert_not_equal 'verve', CreditCard.brand?(verve)
+
+    4.times do
+      verve << '0'
+      assert_equal 'verve', CreditCard.brand?(verve), "Failed for bin #{verve}"
+    end
+
+    assert_equal 19, verve.length
+
+    verve << '0'
+    assert_not_equal 'verve', CreditCard.brand?(verve)
+  end
+
+  def test_should_detect_verve
+    credit_cards = %w[5060990000000000
+                      506112100000000000
+                      5061351000000000000
+                      5061591000000000
+                      506175100000000000
+                      5078801000000000000
+                      5079381000000000
+                      637058100000000000
+                      5079400000000000000
+                      507879000000000000
+                      5061930000000000
+                      506136000000000000]
+    credit_cards.all? { |cc| CreditCard.brand?(cc) == 'verve' }
+  end
+
+  def test_should_detect_tuya_card
+    assert_equal 'tuya', CreditCard.brand?('5888000000000000')
+  end
+
+  def test_should_validate_tuya_card
+    assert_true CreditCard.valid_number?('5888001211111111')
+    # numbers with invalid formats
+    assert_false CreditCard.valid_number?('5888_0000_0000_0030')
+  end
+
+  def test_should_detect_uatp_card_brand
+    assert_equal 'uatp', CreditCard.brand?('117500000000000')
+    assert_equal 'uatp', CreditCard.brand?('117515279008103')
+    assert_equal 'uatp', CreditCard.brand?('129001000000000')
+  end
+
+  def test_should_validate_uatp_card
+    assert_true CreditCard.valid_number?('117515279008103')
+    assert_true CreditCard.valid_number?('116901000000000')
+    assert_true CreditCard.valid_number?('195724000000000')
+    assert_true CreditCard.valid_number?('192004000000000')
+    assert_true CreditCard.valid_number?('135410014004955')
+  end
+
+  def test_should_detect_invalid_uatp_card
+    assert_false CreditCard.valid_number?('117515279008104')
+    assert_false CreditCard.valid_number?('116901000000001')
+    assert_false CreditCard.valid_number?('195724000000001')
+    assert_false CreditCard.valid_number?('192004000000001')
   end
 
   def test_credit_card?

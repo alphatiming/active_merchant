@@ -10,33 +10,111 @@ class RemoteCommerceHubTest < Test::Unit::TestCase
 
     @amount = 1204
     @credit_card = credit_card('4005550000000019', month: '02', year: '2035', verification_value: '123', first_name: 'John', last_name: 'Doe')
-    @google_pay = network_tokenization_credit_card('4005550000000019',
+    @google_pay = network_tokenization_credit_card(
+      '4005550000000019',
       brand: 'visa',
       eci: '05',
       month: '02',
       year: '2035',
       source: :google_pay,
-      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=')
-    @apple_pay = network_tokenization_credit_card('4005550000000019',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk='
+    )
+    @apple_pay = network_tokenization_credit_card(
+      '4005550000000019',
       brand: 'visa',
       eci: '05',
       month: '02',
       year: '2035',
       source: :apple_pay,
-      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=')
-    @declined_apple_pay = network_tokenization_credit_card('4000300011112220',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk='
+    )
+    @declined_apple_pay = network_tokenization_credit_card(
+      '4000300011112220',
       brand: 'visa',
       eci: '05',
       month: '02',
       year: '2035',
       source: :apple_pay,
-      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=')
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk='
+    )
     @declined_card = credit_card('4000300011112220', month: '02', year: '2035', verification_value: '123')
     @master_card = credit_card('5454545454545454', brand: 'master')
     @options = {}
+    @three_d_secure = {
+      ds_transaction_id: '3543-b90d-d6dc1765c98',
+      authentication_response_status: 'A',
+      cavv: 'AAABCZIhcQAAAABZlyFxAAAAAAA',
+      eci: '05',
+      xid: '&x_MD5_Hash=abfaf1d1df004e3c27d5d2e05929b529&x_state=BC&x_reference_3=&x_auth_code=ET141870&x_fp_timestamp=1231877695',
+      version: '2.2.0'
+    }
+    @dynamic_descriptors = {
+      mcc: '1234',
+      merchant_name: 'Spreedly',
+      customer_service_number: '555444321',
+      service_entitlement: '123444555',
+      dynamic_descriptors_address: {
+        street: '123 Main Street',
+        houseNumberOrName: 'Unit B',
+        city: 'Atlanta',
+        stateOrProvince: 'GA',
+        postalCode: '30303',
+        country: 'US'
+      }
+    }
   end
 
   def test_successful_purchase
+    response = @gateway.purchase(@amount, @credit_card, @options)
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
+  def test_successful_purchase_with_payment_name_override
+    billing_address = {
+      address1: 'Infinite Loop',
+      address2: 1,
+      country: 'US',
+      city: 'Cupertino',
+      state: 'CA',
+      zip: '95014'
+    }
+
+    response = @gateway.purchase(@amount, @credit_card, @options.merge(billing_address: billing_address))
+    assert_success response
+    assert_equal 'Approved', response.message
+    assert_equal 'John', response.params['billingAddress']['firstName']
+    assert_equal 'Doe', response.params['billingAddress']['lastName']
+  end
+
+  def test_successful_purchase_with_name_override_on_alternative_payment_methods
+    billing_address = {
+      address1: 'Infinite Loop',
+      address2: 1,
+      country: 'US',
+      city: 'Cupertino',
+      state: 'CA',
+      zip: '95014'
+    }
+
+    response = @gateway.purchase(@amount, @google_pay, @options.merge(billing_address: billing_address))
+    assert_success response
+    assert_equal 'Approved', response.message
+    assert_equal 'DecryptedWallet', response.params['source']['sourceType']
+    assert_equal 'Longbob', response.params['billingAddress']['firstName']
+    assert_equal 'Longsen', response.params['billingAddress']['lastName']
+  end
+
+  def test_successful_purchase_with_billing_name_override
+    response = @gateway.purchase(@amount, @credit_card, @options.merge(billing_address: address))
+    assert_success response
+    assert_equal 'Approved', response.message
+    assert_equal 'Jim', response.params['billingAddress']['firstName']
+    assert_equal 'Smith', response.params['billingAddress']['lastName']
+  end
+
+  def test_successful_3ds_purchase
+    @options.merge!(three_d_secure: @three_d_secure)
     response = @gateway.purchase(@amount, @credit_card, @options)
     assert_success response
     assert_equal 'Approved', response.message
@@ -114,6 +192,12 @@ class RemoteCommerceHubTest < Test::Unit::TestCase
     assert_success response
   end
 
+  def test_successful_purchase_with_dynamic_descriptors
+    response = @gateway.purchase(@amount, @credit_card, @options.merge(@dynamic_descriptors))
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
   def test_failed_purchase
     response = @gateway.purchase(@amount, @declined_card, @options)
     assert_failure response
@@ -127,14 +211,21 @@ class RemoteCommerceHubTest < Test::Unit::TestCase
     assert_equal 'Approved', response.message
   end
 
-  # Commenting out until we are able to resolve issue with capture transactions failing at gateway
-  # def test_successful_authorize_and_capture
-  #   authorize = @gateway.authorize(@amount, @credit_card, @options)
-  #   assert_success authorize
+  def test_successful_authorize_and_capture
+    authorize = @gateway.authorize(@amount, @credit_card, @options)
+    assert_success authorize
 
-  #   capture = @gateway.capture(@amount, authorize.authorization)
-  #   assert_success capture
-  # end
+    capture = @gateway.capture(@amount, authorize.authorization)
+    assert_success capture
+  end
+
+  def test_successful_authorize_and_capture_with_dynamic_descriptors
+    authorize = @gateway.authorize(@amount, @credit_card, @options.merge(@dynamic_descriptors))
+    assert_success authorize
+
+    capture = @gateway.capture(@amount, authorize.authorization, @options.merge(@dynamic_descriptors))
+    assert_success capture
+  end
 
   def test_failed_authorize
     response = @gateway.authorize(@amount, @declined_card, @options)
@@ -155,7 +246,7 @@ class RemoteCommerceHubTest < Test::Unit::TestCase
   def test_failed_void
     response = @gateway.void('123', @options)
     assert_failure response
-    assert_equal 'Referenced transaction is invalid or not found', response.message
+    assert_equal 'Invalid primary transaction ID or not found', response.message
   end
 
   def test_successful_verify
@@ -208,7 +299,20 @@ class RemoteCommerceHubTest < Test::Unit::TestCase
   def test_failed_refund
     response = @gateway.refund(nil, 'abc123|123', @options)
     assert_failure response
-    assert_equal 'Referenced transaction is invalid or not found', response.message
+    assert_equal 'Invalid primary transaction ID or not found', response.message
+  end
+
+  def test_successful_credit
+    response = @gateway.credit(@amount, @credit_card, @options)
+
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
+  def test_failed_credit
+    response = @gateway.credit(@amount, '')
+    assert_failure response
+    assert_equal 'Invalid or Missing Field Data', response.message
   end
 
   def test_successful_store

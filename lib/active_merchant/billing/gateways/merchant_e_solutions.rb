@@ -180,7 +180,7 @@ module ActiveMerchant #:nodoc:
 
       def commit(action, money, parameters)
         url = test? ? self.test_url : self.live_url
-        parameters[:transaction_amount] = amount(money) if money unless action == 'V'
+        parameters[:transaction_amount] = amount(money) if !(action == 'V') && money
 
         response =
           begin
@@ -189,11 +189,15 @@ module ActiveMerchant #:nodoc:
             { 'error_code' => '404', 'auth_response_text' => e.to_s }
           end
 
-        Response.new(success_from(response), message_from(response), response,
+        Response.new(
+          success_from(response),
+          message_from(response),
+          response,
           authorization: authorization_from(response),
           test: test?,
           cvv_result: response['cvv2_result'],
-          avs_result: { code: response['avs_result'] })
+          avs_result: { code: response['avs_result'] }
+        )
       end
 
       def authorization_from(response)
@@ -220,8 +224,7 @@ module ActiveMerchant #:nodoc:
         post[:profile_key] = @options[:password]
         post[:transaction_type] = action if action
 
-        request = post.merge(parameters).map { |key, value| "#{key}=#{CGI.escape(value.to_s)}" }.join('&')
-        request
+        post.merge(parameters).map { |key, value| "#{key}=#{CGI.escape(value.to_s)}" }.join('&')
       end
     end
   end

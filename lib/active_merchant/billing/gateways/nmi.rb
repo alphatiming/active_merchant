@@ -8,7 +8,7 @@ module ActiveMerchant #:nodoc:
       self.test_url = self.live_url = 'https://secure.networkmerchants.com/api/transact.php'
       self.default_currency = 'USD'
       self.money_format = :dollars
-      self.supported_countries = ['US']
+      self.supported_countries = %w[US CA]
       self.supported_cardtypes = %i[visa master american_express discover]
       self.homepage_url = 'http://nmi.com/'
       self.display_name = 'NMI'
@@ -134,6 +134,7 @@ module ActiveMerchant #:nodoc:
           gsub(%r((cvv=)\d+), '\1[FILTERED]').
           gsub(%r((checkaba=)\d+), '\1[FILTERED]').
           gsub(%r((checkaccount=)\d+), '\1[FILTERED]').
+          gsub(%r((cavv=)[^&\n]*), '\1[FILTERED]').
           gsub(%r((cryptogram=)[^&]+(&?)), '\1[FILTERED]\2')
       end
 
@@ -166,7 +167,7 @@ module ActiveMerchant #:nodoc:
         elsif payment_method.is_a?(NetworkTokenizationCreditCard)
           post[:ccnumber] = payment_method.number
           post[:ccexp] = exp_date(payment_method)
-          post[:token_cryptogram] = payment_method.payment_cryptogram
+          add_network_token_fields(post, payment_method)
         elsif card_brand(payment_method) == 'check'
           post[:payment] = 'check'
           post[:firstname] = payment_method.first_name
@@ -184,6 +185,17 @@ module ActiveMerchant #:nodoc:
           post[:ccnumber] = payment_method.number
           post[:cvv] = payment_method.verification_value unless empty?(payment_method.verification_value)
           post[:ccexp] = exp_date(payment_method)
+        end
+      end
+
+      def add_network_token_fields(post, payment_method)
+        if payment_method.source == :apple_pay || payment_method.source == :google_pay
+          post[:cavv] = payment_method.payment_cryptogram
+          post[:eci] = payment_method.eci
+          post[:decrypted_applepay_data] = 1
+          post[:decrypted_googlepay_data] = 1
+        else
+          post[:token_cryptogram] = payment_method.payment_cryptogram
         end
       end
 
@@ -212,7 +224,8 @@ module ActiveMerchant #:nodoc:
         else
           post[:stored_credential_indicator] = 'used'
           # should only send :initial_transaction_id if it is a MIT
-          post[:initial_transaction_id] = stored_credential[:network_transaction_id] if post[:initiated_by] == 'merchant'
+          ntid = options[:network_transaction_id] || stored_credential[:network_transaction_id]
+          post[:initial_transaction_id] = ntid if post[:initiated_by] == 'merchant'
         end
       end
 
@@ -334,8 +347,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def headers
-        headers = { 'Content-Type' => 'application/x-www-form-urlencoded;charset=UTF-8' }
-        headers
+        { 'Content-Type' => 'application/x-www-form-urlencoded;charset=UTF-8' }
       end
 
       def post_data(action, params)
@@ -347,7 +359,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def parse(body)
-        Hash[CGI::parse(body).map { |k, v| [k.intern, v.first] }]
+        CGI::parse(body).map { |k, v| [k.intern, v.first] }.to_h
       end
 
       def success_from(response)

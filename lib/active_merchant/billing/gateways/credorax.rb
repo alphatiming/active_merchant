@@ -254,9 +254,7 @@ module ActiveMerchant #:nodoc:
             normalized_value = normalize(value)
             next if normalized_value.nil?
 
-            if key == :'3ds_homephonecountry'
-              next unless options[:billing_address] && options[:billing_address][:phone]
-            end
+            next if key == :'3ds_homephonecountry' && !(options[:billing_address] && options[:billing_address][:phone])
 
             post[key] = normalized_value unless post[key]
           end
@@ -417,7 +415,7 @@ module ActiveMerchant #:nodoc:
           three_d_secure_options[:eci],
           three_d_secure_options[:cavv]
         )
-        post[:'3ds_version'] = three_d_secure_options[:version]&.start_with?('2') ? '2.0' : three_d_secure_options[:version]
+        post[:'3ds_version'] = three_d_secure_options[:version] == '2' ? '2.0' : three_d_secure_options[:version]
         post[:'3ds_dstrxid'] = three_d_secure_options[:ds_transaction_id]
       end
 
@@ -507,7 +505,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def parse(body)
-        Hash[CGI::parse(body).map { |k, v| [k.upcase, v.first] }]
+        CGI::parse(body).map { |k, v| [k.upcase, v.first] }.to_h
       end
 
       def success_from(response)

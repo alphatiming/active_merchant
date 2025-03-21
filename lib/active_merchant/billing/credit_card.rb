@@ -39,6 +39,9 @@ module ActiveMerchant #:nodoc:
     # * Anda
     # * Creditos directos (Tarjeta D)
     # * Panal
+    # * Verve
+    # * Tuya
+    # * UATP
     #
     # For testing purposes, use the 'bogus' credit card brand. This skips the vast majority of
     # validations, allowing you to focus on your core concerns until you're ready to be more concerned
@@ -132,6 +135,9 @@ module ActiveMerchant #:nodoc:
       # * +'anda'+
       # * +'tarjeta-d'+
       # * +'panal'+
+      # * +'verve'+
+      # * +'tuya'+
+      # * +'uatp'+
       #
       # Or, if you wish to test your implementation, +'bogus'+.
       #
@@ -288,7 +294,7 @@ module ActiveMerchant #:nodoc:
       end
 
       %w(month year start_month start_year).each do |m|
-        class_eval %(
+        class_eval <<~RUBY, __FILE__, __LINE__ + 1
           def #{m}=(v)
             @#{m} = case v
             when "", nil, 0
@@ -297,7 +303,7 @@ module ActiveMerchant #:nodoc:
               v.to_i
             end
           end
-        )
+        RUBY
       end
 
       def verification_value?
@@ -395,9 +401,7 @@ module ActiveMerchant #:nodoc:
       def validate_card_brand_and_number #:nodoc:
         errors = []
 
-        if !empty?(brand)
-          errors << [:brand, 'is invalid'] if !CreditCard.card_companies.include?(brand)
-        end
+        errors << [:brand, 'is invalid'] if !empty?(brand) && !CreditCard.card_companies.include?(brand)
 
         if empty?(number)
           errors << [:number, 'is required']
@@ -405,9 +409,7 @@ module ActiveMerchant #:nodoc:
           errors << [:number, 'is not a valid credit card number']
         end
 
-        if errors.empty?
-          errors << [:brand, 'does not match the card number'] if !CreditCard.matching_brand?(number, brand)
-        end
+        errors << [:brand, 'does not match the card number'] if errors.empty? && !CreditCard.matching_brand?(number, brand)
 
         errors
       end
@@ -425,6 +427,7 @@ module ActiveMerchant #:nodoc:
 
       class ExpiryDate #:nodoc:
         attr_reader :month, :year
+
         def initialize(month, year)
           @month = month.to_i
           @year = year.to_i

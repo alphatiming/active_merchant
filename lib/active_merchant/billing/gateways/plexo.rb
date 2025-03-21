@@ -67,6 +67,7 @@ module ActiveMerchant #:nodoc:
       def verify(credit_card, options = {})
         post = {}
         post[:ReferenceId] = options[:reference_id] || generate_unique_id
+        post[:Flow] = 'direct'
         post[:MerchantId] = options[:merchant_id] || @credentials[:merchant_id]
         post[:StatementDescriptor] = options[:statement_descriptor] if options[:statement_descriptor]
         post[:CustomerId] = options[:customer_id] if options[:customer_id]
@@ -76,6 +77,7 @@ module ActiveMerchant #:nodoc:
         add_metadata(post, options[:metadata])
         add_amount(money, post, options)
         add_browser_details(post, options)
+        add_invoice_number(post, options)
 
         commit('/verify', post, options)
       end
@@ -90,7 +92,8 @@ module ActiveMerchant #:nodoc:
           gsub(%r(("Number\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]').
           gsub(%r(("Cvc\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]').
           gsub(%r(("InvoiceNumber\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]').
-          gsub(%r(("MerchantId\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]')
+          gsub(%r(("MerchantId\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]').
+          gsub(%r(("Cryptogram\\?"\s*:\s*\\?")[^"]*)i, '\1[FILTERED]')
       end
 
       private
@@ -105,12 +108,14 @@ module ActiveMerchant #:nodoc:
         post[:Installments] = options[:installments] if options[:installments]
         post[:StatementDescriptor] = options[:statement_descriptor] if options[:statement_descriptor]
         post[:CustomerId] = options[:customer_id] if options[:customer_id]
+        post[:Flow] = 'direct'
 
         add_payment_method(post, payment, options)
         add_items(post, options[:items])
         add_metadata(post, options[:metadata])
         add_amount(money, post, options)
         add_browser_details(post, options)
+        add_invoice_number(post, options)
       end
 
       def header(parameters = {})
@@ -186,19 +191,53 @@ module ActiveMerchant #:nodoc:
         post[:BrowserDetails][:IpAddress] = browser_details[:ip] if browser_details[:ip]
       end
 
+      def add_invoice_number(post, options)
+        post[:InvoiceNumber] = options[:invoice_number] if options[:invoice_number]
+      end
+
       def add_payment_method(post, payment, options)
-        post[:paymentMethod] = {}
+        payment_method = build_payment_method(payment)
 
-        if payment&.is_a?(CreditCard)
-          post[:paymentMethod][:type] = 'card'
-          post[:paymentMethod][:Card] = {}
-          post[:paymentMethod][:Card][:Number] = payment.number
-          post[:paymentMethod][:Card][:ExpMonth] = format(payment.month, :two_digits) if payment.month
-          post[:paymentMethod][:Card][:ExpYear] = format(payment.year, :two_digits) if payment.year
-          post[:paymentMethod][:Card][:Cvc] = payment.verification_value if payment.verification_value
-
-          add_card_holder(post[:paymentMethod][:Card], payment, options)
+        if payment_method.present?
+          add_card_holder(payment_method[:NetworkToken] || payment_method[:Card], payment, options)
+          post[:paymentMethod] = payment_method
         end
+      end
+
+      def build_payment_method(payment)
+        case payment
+        when NetworkTokenizationCreditCard
+          {
+            source: 'network-token',
+            id: payment.brand,
+            NetworkToken: {
+              Number: payment.number,
+              Bin: get_last_eight_digits(payment.number),
+              Last4: get_last_four_digits(payment.number),
+              ExpMonth: (format(payment.month, :two_digits) if payment.month),
+              ExpYear: (format(payment.year, :two_digits) if payment.year),
+              Cryptogram: payment.payment_cryptogram
+            }
+          }
+        when CreditCard
+          {
+            type: 'card',
+            Card: {
+              Number: payment.number,
+              ExpMonth: (format(payment.month, :two_digits) if payment.month),
+              ExpYear: (format(payment.year, :two_digits) if payment.year),
+              Cvc: payment.verification_value
+            }
+          }
+        end
+      end
+
+      def get_last_eight_digits(number)
+        number[-8..-1]
+      end
+
+      def get_last_four_digits(number)
+        number[-4..-1]
       end
 
       def add_card_holder(card, payment, options)

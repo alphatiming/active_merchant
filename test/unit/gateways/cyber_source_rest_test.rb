@@ -10,10 +10,30 @@ class CyberSourceRestTest < Test::Unit::TestCase
       private_key: "NYlM1sgultLjvgaraWvDCXykdz1buqOW8yXE3pMlmxQ=\n"
     )
     @bank_account = check(account_number: '4100', routing_number: '121042882')
-    @credit_card = credit_card('4111111111111111',
+    @credit_card = credit_card(
+      '4111111111111111',
       verification_value: '987',
       month: 12,
-      year: 2031)
+      year: 2031
+    )
+    @master_card = credit_card('2222420000001113', brand: 'master')
+    @carnet_card = credit_card('5062280000000000', brand: 'carnet')
+
+    @visa_network_token = network_tokenization_credit_card(
+      '4111111111111111',
+      brand: 'visa',
+      eci: '05',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      source: :network_token
+    )
+
+    @mastercard_network_token = network_tokenization_credit_card(
+      '5555555555554444',
+      brand: 'master',
+      eci: '05',
+      payment_cryptogram: 'EHuWW9PiBkWvqE5juRwDzAUFBAk=',
+      source: :network_token
+    )
     @apple_pay = network_tokenization_credit_card(
       '4111111111111111',
       payment_cryptogram: 'AceY+igABPs3jdwNaDg3MAACAAA=',
@@ -57,6 +77,7 @@ class CyberSourceRestTest < Test::Unit::TestCase
       },
       email: 'test@cybs.com'
     }
+    @discover_card = credit_card('6011111111111117', brand: 'discover')
     @gmt_time = Time.now.httpdate
     @digest = 'SHA-256=gXWufV4Zc7VkN9Wkv9jh/JuAVclqDusx3vkyo3uJFWU='
     @resource = '/pts/v2/payments/'
@@ -96,7 +117,7 @@ class CyberSourceRestTest < Test::Unit::TestCase
 
     assert_equal 'def345', parsed['keyid']
     assert_equal 'HmacSHA256', parsed['algorithm']
-    assert_equal 'host date (request-target) digest v-c-merchant-id', parsed['headers']
+    assert_equal 'host date request-target digest v-c-merchant-id', parsed['headers']
     assert_equal %w[algorithm headers keyid signature], signature.split(', ').map { |v| v.split('=').first }.sort
   end
 
@@ -104,7 +125,7 @@ class CyberSourceRestTest < Test::Unit::TestCase
     signature = @gateway.send :get_http_signature, @resource, nil, 'get', @gmt_time
 
     parsed = parse_signature(signature)
-    assert_equal 'host date (request-target) v-c-merchant-id', parsed['headers']
+    assert_equal 'host date request-target v-c-merchant-id', parsed['headers']
   end
 
   def test_scrub
@@ -185,6 +206,79 @@ class CyberSourceRestTest < Test::Unit::TestCase
     assert_equal '4158880000', address[:phoneNumber]
   end
 
+  def test_authorize_network_token_visa
+    stub_comms do
+      @gateway.authorize(100, @visa_network_token, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '001', request['paymentInformation']['tokenizedCard']['type']
+      assert_equal '3', request['paymentInformation']['tokenizedCard']['transactionType']
+      assert_equal 'EHuWW9PiBkWvqE5juRwDzAUFBAk=', request['paymentInformation']['tokenizedCard']['cryptogram']
+      assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
+      assert_equal '015', request['processingInformation']['paymentSolution']
+      assert_equal 'internet', request['processingInformation']['commerceIndicator']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_authorize_network_token_visa_recurring
+    @options[:stored_credential] = stored_credential(:cardholder, :recurring)
+    stub_comms do
+      @gateway.authorize(100, @visa_network_token, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '001', request['paymentInformation']['tokenizedCard']['type']
+      assert_equal '3', request['paymentInformation']['tokenizedCard']['transactionType']
+      assert_equal 'EHuWW9PiBkWvqE5juRwDzAUFBAk=', request['paymentInformation']['tokenizedCard']['cryptogram']
+      assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
+      assert_equal '015', request['processingInformation']['paymentSolution']
+      assert_equal 'recurring', request['processingInformation']['commerceIndicator']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_authorize_network_token_visa_installment
+    @options[:stored_credential] = stored_credential(:cardholder, :installment)
+    stub_comms do
+      @gateway.authorize(100, @visa_network_token, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '001', request['paymentInformation']['tokenizedCard']['type']
+      assert_equal '3', request['paymentInformation']['tokenizedCard']['transactionType']
+      assert_equal 'EHuWW9PiBkWvqE5juRwDzAUFBAk=', request['paymentInformation']['tokenizedCard']['cryptogram']
+      assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
+      assert_equal '015', request['processingInformation']['paymentSolution']
+      assert_equal 'install', request['processingInformation']['commerceIndicator']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_authorize_network_token_visa_unscheduled
+    @options[:stored_credential] = stored_credential(:cardholder, :unscheduled)
+    stub_comms do
+      @gateway.authorize(100, @visa_network_token, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '001', request['paymentInformation']['tokenizedCard']['type']
+      assert_equal '3', request['paymentInformation']['tokenizedCard']['transactionType']
+      assert_equal 'EHuWW9PiBkWvqE5juRwDzAUFBAk=', request['paymentInformation']['tokenizedCard']['cryptogram']
+      assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
+      assert_equal '015', request['processingInformation']['paymentSolution']
+      assert_equal 'internet', request['processingInformation']['commerceIndicator']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_authorize_network_token_mastercard
+    stub_comms do
+      @gateway.authorize(100, @mastercard_network_token, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '002', request['paymentInformation']['tokenizedCard']['type']
+      assert_equal '3', request['paymentInformation']['tokenizedCard']['transactionType']
+      assert_equal 'EHuWW9PiBkWvqE5juRwDzAUFBAk=', request['paymentInformation']['tokenizedCard']['cryptogram']
+      assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
+      assert_equal '014', request['processingInformation']['paymentSolution']
+      assert_equal 'internet', request['processingInformation']['commerceIndicator']
+    end.respond_with(successful_purchase_response)
+  end
+
   def test_authorize_apple_pay_visa
     stub_comms do
       @gateway.authorize(100, @apple_pay, @options)
@@ -202,9 +296,10 @@ class CyberSourceRestTest < Test::Unit::TestCase
 
   def test_authorize_google_pay_master_card
     stub_comms do
-      @gateway.authorize(100, @google_pay_mc, @options)
-    end.check_request do |_endpoint, data, _headers|
+      @gateway.authorize(100, @google_pay_mc, @options.merge(merchant_id: 'MerchantId'))
+    end.check_request do |_endpoint, data, headers|
       request = JSON.parse(data)
+      assert_equal 'MerchantId', headers['V-C-Merchant-Id']
       assert_equal '002', request['paymentInformation']['tokenizedCard']['type']
       assert_equal '1', request['paymentInformation']['tokenizedCard']['transactionType']
       assert_nil request['paymentInformation']['tokenizedCard']['requestorId']
@@ -254,7 +349,6 @@ class CyberSourceRestTest < Test::Unit::TestCase
       request = JSON.parse(data)
       assert_equal 'recurring', request['processingInformation']['commerceIndicator']
       assert_equal 'customer', request.dig('processingInformation', 'authorizationOptions', 'initiator', 'type')
-      assert_equal true, request.dig('processingInformation', 'authorizationOptions', 'initiator', 'merchantInitiatedTransaction', 'storedCredentialUsed')
     end.respond_with(successful_purchase_response)
 
     assert_success response
@@ -268,7 +362,8 @@ class CyberSourceRestTest < Test::Unit::TestCase
       request = JSON.parse(data)
       assert_equal 'recurring', request['processingInformation']['commerceIndicator']
       assert_equal 'merchant', request.dig('processingInformation', 'authorizationOptions', 'initiator', 'type')
-      assert_equal true, request.dig('processingInformation', 'authorizationOptions', 'initiator', 'merchantInitiatedTransaction', 'storedCredentialUsed')
+      assert_equal true, request.dig('processingInformation', 'authorizationOptions', 'initiator', 'storedCredentialUsed')
+      assert_nil request.dig('processingInformation', 'authorizationOptions', 'initiator', 'merchantInitiatedTransaction', 'originalAuthorizedAmount')
     end.respond_with(successful_purchase_response)
 
     assert_success response
@@ -378,6 +473,57 @@ class CyberSourceRestTest < Test::Unit::TestCase
     end.respond_with(successful_purchase_response)
   end
 
+  def test_mastercard_purchase_with_3ds2
+    @options[:three_d_secure] = {
+      version: '2.2.0',
+      cavv: '3q2+78r+ur7erb7vyv66vv\/\/\/\/8=',
+      eci: '05',
+      ds_transaction_id: 'ODUzNTYzOTcwODU5NzY3Qw==',
+      enrolled: 'true',
+      authentication_response_status: 'Y',
+      cavv_algorithm: '2'
+    }
+    stub_comms do
+      @gateway.purchase(100, @master_card, @options)
+    end.check_request do |_endpoint, data, _headers|
+      json_data = JSON.parse(data)
+      assert_equal json_data['consumerAuthenticationInformation']['ucafAuthenticationData'], '3q2+78r+ur7erb7vyv66vv\/\/\/\/8='
+      assert_equal json_data['consumerAuthenticationInformation']['ucafCollectionIndicator'], '2'
+      assert_equal json_data['consumerAuthenticationInformation']['cavvAlgorithm'], '2'
+      assert_equal json_data['consumerAuthenticationInformation']['paSpecificationVersion'], '2.2.0'
+      assert_equal json_data['consumerAuthenticationInformation']['directoryServerTransactionID'], 'ODUzNTYzOTcwODU5NzY3Qw=='
+      assert_equal json_data['consumerAuthenticationInformation']['eciRaw'], '05'
+      assert_equal json_data['consumerAuthenticationInformation']['xid'], '3q2+78r+ur7erb7vyv66vv\/\/\/\/8='
+      assert_equal json_data['consumerAuthenticationInformation']['veresEnrolled'], 'true'
+      assert_equal json_data['consumerAuthenticationInformation']['paresStatus'], 'Y'
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_visa_purchase_with_3ds2
+    @options[:three_d_secure] = {
+      version: '2.2.0',
+      cavv: '3q2+78r+ur7erb7vyv66vv\/\/\/\/8=',
+      eci: '05',
+      ds_transaction_id: 'ODUzNTYzOTcwODU5NzY3Qw==',
+      enrolled: 'true',
+      authentication_response_status: 'Y',
+      cavv_algorithm: '2'
+    }
+    stub_comms do
+      @gateway.authorize(100, @credit_card, @options)
+    end.check_request do |_endpoint, data, _headers|
+      json_data = JSON.parse(data)
+      assert_equal json_data['consumerAuthenticationInformation']['cavv'], '3q2+78r+ur7erb7vyv66vv\/\/\/\/8='
+      assert_equal json_data['consumerAuthenticationInformation']['cavvAlgorithm'], '2'
+      assert_equal json_data['consumerAuthenticationInformation']['paSpecificationVersion'], '2.2.0'
+      assert_equal json_data['consumerAuthenticationInformation']['directoryServerTransactionID'], 'ODUzNTYzOTcwODU5NzY3Qw=='
+      assert_equal json_data['consumerAuthenticationInformation']['eciRaw'], '05'
+      assert_equal json_data['consumerAuthenticationInformation']['xid'], '3q2+78r+ur7erb7vyv66vv\/\/\/\/8='
+      assert_equal json_data['consumerAuthenticationInformation']['veresEnrolled'], 'true'
+      assert_equal json_data['consumerAuthenticationInformation']['paresStatus'], 'Y'
+    end.respond_with(successful_purchase_response)
+  end
+
   def test_adds_application_id_as_partner_solution_id
     partner_id = 'partner_id'
     CyberSourceRestGateway.application_id = partner_id
@@ -390,6 +536,64 @@ class CyberSourceRestTest < Test::Unit::TestCase
     end.respond_with(successful_purchase_response)
   ensure
     CyberSourceRestGateway.application_id = nil
+  end
+
+  def test_purchase_with_level_2_data
+    stub_comms do
+      @gateway.authorize(100, @credit_card, @options.merge({ purchase_order_number: '13829012412' }))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '13829012412', request['orderInformation']['invoiceDetails']['purchaseOrderNumber']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_purchase_with_level_3_data
+    options = {
+      purchase_order_number: '6789',
+      discount_amount: '150',
+      ships_from_postal_code: '90210',
+      line_items: [
+        {
+          productName: 'Product Name',
+          kind: 'debit',
+          quantity: 10,
+          unitPrice: '9.5000',
+          totalAmount: '95.00',
+          taxAmount: '5.00',
+          discountAmount: '0.00',
+          productCode: '54321',
+          commodityCode: '98765'
+        },
+        {
+          productName: 'Other Product Name',
+          kind: 'debit',
+          quantity: 1,
+          unitPrice: '2.5000',
+          totalAmount: '90.00',
+          taxAmount: '2.00',
+          discountAmount: '1.00',
+          productCode: '54322',
+          commodityCode: '98766'
+        }
+      ]
+    }
+    stub_comms do
+      @gateway.authorize(100, @credit_card, @options.merge(options))
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '3', request['processingInformation']['purchaseLevel']
+      assert_equal '150', request['orderInformation']['amountDetails']['discountAmount']
+      assert_equal '90210', request['orderInformation']['shipping_details']['shipFromPostalCode']
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_accurate_card_type_and_code_for_carnet
+    stub_comms do
+      @gateway.purchase(100, @carnet_card, @options)
+    end.check_request do |_endpoint, data, _headers|
+      request = JSON.parse(data)
+      assert_equal '058', request['paymentInformation']['card']['type']
+    end.respond_with(successful_purchase_response)
   end
 
   private
@@ -437,6 +641,48 @@ class CyberSourceRestTest < Test::Unit::TestCase
     -> "\r\n"
     reading 905 bytes...
     -> "{\"_links\":{\"authReversal\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/6750124114786780104953/reversals\"},\"self\":{\"method\":\"GET\",\"href\":\"/pts/v2/payments/6750124114786780104953\"},\"capture\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/6750124114786780104953/captures\"}},\"clientReferenceInformation\":{\"code\":\"b8779865d140125036016a0f85db907f\"},\"id\":\"6750124114786780104953\",\"orderInformation\":{\"amountDetails\":{\"authorizedAmount\":\"102.21\",\"currency\":\"USD\"}},\"paymentAccountInformation\":{\"card\":{\"type\":\"001\"}},\"paymentInformation\":{\"tokenizedCard\":{\"type\":\"001\"},\"card\":{\"type\":\"001\"}},\"pointOfSaleInformation\":{\"terminalId\":\"111111\"},\"processorInformation\":{\"approvalCode\":\"888888\",\"networkTransactionId\":\"123456789619999\",\"transactionId\":\"123456789619999\",\"responseCode\":\"100\",\"avs\":{\"code\":\"X\",\"codeRaw\":\"I1\"}},\"reconciliationId\":\"78243988SD9YL291\",\"status\":\"AUTHORIZED\",\"submitTimeUtc\":\"2023-01-29T17:13:31Z\"}"
+    POST
+  end
+
+  def pre_scrubbed_nt
+    <<-PRE
+    <- "POST /pts/v2/payments/ HTTP/1.1\r\nContent-Type: application/json;charset=utf-8\r\nAccept: application/hal+json;charset=utf-8\r\nV-C-Merchant-Id: testrest\r\nDate: Sun, 29 Jan 2023 17:13:30 GMT\r\nHost: apitest.cybersource.com\r\nSignature: keyid=\"08c94330-f618-42a3-b09d-e1e43be5efda\", algorithm=\"HmacSHA256\", headers=\"host date (request-target) digest v-c-merchant-id\", signature=\"DJHeHWceVrsJydd8BCbGowr9dzQ/ry5cGN1FocLakEw=\"\r\nDigest: SHA-256=wuV1cxGzs6KpuUKJmlD7pKV6MZ/5G1wQVoYbf8cRChM=\r\nConnection: close\r\nAccept-Encoding: gzip;q=1.0,deflate;q=0.6,identity;q=0.3\r\nUser-Agent: Ruby\r\nContent-Length: 584\r\n\r\n"
+    <- "{\"clientReferenceInformation\":{\"code\":\"ba20ae354e25edd1a5ab27158c0a2955\"},\"paymentInformation\":{\"tokenizedCard\":{\"number\":\"4111111111111111\",\"expirationMonth\":9,\"expirationYear\":2025,\"cryptogram\":\"EHuWW9PiBkWvqE5juRwDzAUFBAk=\",\"type\":\"001\",\"transactionType\":\"3\"}},\"orderInformation\":{\"amountDetails\":{\"totalAmount\":\"102.21\",\"currency\":\"USD\"},\"billTo\":{\"firstName\":\"John\",\"lastName\":\"Doe\",\"address1\":\"1 Market St\",\"locality\":\"san francisco\",\"administrativeArea\":\"CA\",\"postalCode\":\"94105\",\"country\":\"US\",\"email\":\"test@cybs.com\",\"phoneNumber\":\"4158880000\"}},\"processingInformation\":{\"commerceIndicator\":\"internet\",\"paymentSolution\":\"015\",\"authorizationOptions\":{}}}"
+    -> "HTTP/1.1 201 Created\r\n"
+    -> "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+    -> "Pragma: no-cache\r\n"
+    -> "Expires: -1\r\n"
+    -> "Strict-Transport-Security: max-age=31536000\r\n"
+    -> "Content-Type: application/hal+json\r\n"
+    -> "Content-Length: 905\r\n"
+    -> "x-response-time: 291ms\r\n"
+    -> "X-OPNET-Transaction-Trace: 0b1f2bd7-9545-4939-9478-4b76cf7199b6\r\n"
+    -> "Connection: close\r\n"
+    -> "v-c-correlation-id: 42969bf5-a77d-4035-9d09-58d4ca070e8c\r\n"
+    -> "\r\n"
+    reading 905 bytes...
+    -> "{\"_links\":{\"authReversal\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/7145981349676498704951/reversals\"},\"self\":{\"method\":\"GET\",\"href\":\"/pts/v2/payments/7145981349676498704951\"},\"capture\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/7145981349676498704951/captures\"}},\"clientReferenceInformation\":{\"code\":\"ba20ae354e25edd1a5ab27158c0a2955\"},\"id\":\"7145981349676498704951\",\"issuerInformation\":{\"responseRaw\":\"0110322000000E10000200000000000001022105012115353420253130383141564D334B5953323833313030303030000159008000223134573031363135303730333830323039344730363400103232415050524F56414C00065649435243200034544B54523031313132313231323132313231544C3030323636504E30303431313131\"},\"orderInformation\":{\"amountDetails\":{\"authorizedAmount\":\"102.21\",\"currency\":\"USD\"}},\"paymentAccountInformation\":{\"card\":{\"type\":\"001\"}},\"paymentInformation\":{\"tokenizedCard\":{\"requestorId\":\"12121212121\",\"assuranceLevel\":\"66\",\"type\":\"001\"},\"card\":{\"suffix\":\"1111\",\"type\":\"001\"}},\"pointOfSaleInformation\":{\"terminalId\":\"01234567\"},\"processorInformation\":{\"merchantNumber\":\"000123456789012\",\"approvalCode\":\"831000\",\"networkTransactionId\":\"016150703802094\",\"transactionId\":\"016150703802094\",\"responseCode\":\"00\",\"avs\":{\"code\":\"Y\",\"codeRaw\":\"Y\"}},\"reconciliationId\":\"1081AVM3KYS2\",\"status\":\"AUTHORIZED\",\"submitTimeUtc\":\"2024-05-01T21:15:35Z\"}"
+    PRE
+  end
+
+  def post_scrubbed_nt
+    <<-POST
+    <- "POST /pts/v2/payments/ HTTP/1.1\r\nContent-Type: application/json;charset=utf-8\r\nAccept: application/hal+json;charset=utf-8\r\nV-C-Merchant-Id: testrest\r\nDate: Sun, 29 Jan 2023 17:13:30 GMT\r\nHost: apitest.cybersource.com\r\nSignature: keyid=\"[FILTERED]\", algorithm=\"HmacSHA256\", headers=\"host date (request-target) digest v-c-merchant-id\", signature=\"[FILTERED]\"\r\nDigest: SHA-256=[FILTERED]\r\nConnection: close\r\nAccept-Encoding: gzip;q=1.0,deflate;q=0.6,identity;q=0.3\r\nUser-Agent: Ruby\r\nContent-Length: 584\r\n\r\n"
+    <- "{\"clientReferenceInformation\":{\"code\":\"ba20ae354e25edd1a5ab27158c0a2955\"},\"paymentInformation\":{\"tokenizedCard\":{\"number\":\"[FILTERED]\",\"expirationMonth\":9,\"expirationYear\":2025,\"cryptogram\":\"[FILTERED]\",\"type\":\"001\",\"transactionType\":\"3\"}},\"orderInformation\":{\"amountDetails\":{\"totalAmount\":\"102.21\",\"currency\":\"USD\"},\"billTo\":{\"firstName\":\"John\",\"lastName\":\"Doe\",\"address1\":\"1 Market St\",\"locality\":\"san francisco\",\"administrativeArea\":\"CA\",\"postalCode\":\"94105\",\"country\":\"US\",\"email\":\"test@cybs.com\",\"phoneNumber\":\"4158880000\"}},\"processingInformation\":{\"commerceIndicator\":\"internet\",\"paymentSolution\":\"015\",\"authorizationOptions\":{}}}"
+    -> "HTTP/1.1 201 Created\r\n"
+    -> "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+    -> "Pragma: no-cache\r\n"
+    -> "Expires: -1\r\n"
+    -> "Strict-Transport-Security: max-age=31536000\r\n"
+    -> "Content-Type: application/hal+json\r\n"
+    -> "Content-Length: 905\r\n"
+    -> "x-response-time: 291ms\r\n"
+    -> "X-OPNET-Transaction-Trace: 0b1f2bd7-9545-4939-9478-4b76cf7199b6\r\n"
+    -> "Connection: close\r\n"
+    -> "v-c-correlation-id: 42969bf5-a77d-4035-9d09-58d4ca070e8c\r\n"
+    -> "\r\n"
+    reading 905 bytes...
+    -> "{\"_links\":{\"authReversal\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/7145981349676498704951/reversals\"},\"self\":{\"method\":\"GET\",\"href\":\"/pts/v2/payments/7145981349676498704951\"},\"capture\":{\"method\":\"POST\",\"href\":\"/pts/v2/payments/7145981349676498704951/captures\"}},\"clientReferenceInformation\":{\"code\":\"ba20ae354e25edd1a5ab27158c0a2955\"},\"id\":\"7145981349676498704951\",\"issuerInformation\":{\"responseRaw\":\"0110322000000E10000200000000000001022105012115353420253130383141564D334B5953323833313030303030000159008000223134573031363135303730333830323039344730363400103232415050524F56414C00065649435243200034544B54523031313132313231323132313231544C3030323636504E30303431313131\"},\"orderInformation\":{\"amountDetails\":{\"authorizedAmount\":\"102.21\",\"currency\":\"USD\"}},\"paymentAccountInformation\":{\"card\":{\"type\":\"001\"}},\"paymentInformation\":{\"tokenizedCard\":{\"requestorId\":\"12121212121\",\"assuranceLevel\":\"66\",\"type\":\"001\"},\"card\":{\"suffix\":\"1111\",\"type\":\"001\"}},\"pointOfSaleInformation\":{\"terminalId\":\"01234567\"},\"processorInformation\":{\"merchantNumber\":\"000123456789012\",\"approvalCode\":\"831000\",\"networkTransactionId\":\"016150703802094\",\"transactionId\":\"016150703802094\",\"responseCode\":\"00\",\"avs\":{\"code\":\"Y\",\"codeRaw\":\"Y\"}},\"reconciliationId\":\"1081AVM3KYS2\",\"status\":\"AUTHORIZED\",\"submitTimeUtc\":\"2024-05-01T21:15:35Z\"}"
     POST
   end
 

@@ -76,6 +76,18 @@ class RemoteLitleTest < Test::Unit::TestCase
         payment_cryptogram: 'BwABBJQ1AgAAAAAgJDUCAAAAAAA='
       }
     )
+
+    @decrypted_network_token = NetworkTokenizationCreditCard.new(
+      {
+        source: :network_token,
+        month: '02',
+        year: '2050',
+        brand: 'master',
+        number:  '5112010000000000',
+        payment_cryptogram: 'BwABBJQ1AgAAAAAgJDUCAAAAAAA='
+      }
+    )
+
     @check = check(
       name: 'Tom Black',
       routing_number:  '011075150',
@@ -86,7 +98,8 @@ class RemoteLitleTest < Test::Unit::TestCase
       name: 'John Smith',
       routing_number: '011075150',
       account_number: '1099999999',
-      account_type: 'checking'
+      account_type: nil,
+      account_holder_type: 'checking'
     )
     @store_check = check(
       routing_number: '011100012',
@@ -160,7 +173,9 @@ class RemoteLitleTest < Test::Unit::TestCase
   end
 
   def test_unsuccessful_authorization
-    assert response = @gateway.authorize(60060, @declined_card,
+    assert response = @gateway.authorize(
+      60060,
+      @declined_card,
       {
         order_id: '6',
         billing_address: {
@@ -171,7 +186,8 @@ class RemoteLitleTest < Test::Unit::TestCase
           zip: '03038',
           country: 'US'
         }
-      })
+      }
+    )
     assert_failure response
     assert_equal 'Insufficient Funds', response.message
   end
@@ -256,6 +272,12 @@ class RemoteLitleTest < Test::Unit::TestCase
     assert_equal 'Approved', response.message
   end
 
+  def test_successful_purchase_with_network_token
+    assert response = @gateway.purchase(10100, @decrypted_network_token)
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
   def test_successful_purchase_with_level_two_data_visa
     options = @options.merge(
       level_2_data: {
@@ -305,7 +327,7 @@ class RemoteLitleTest < Test::Unit::TestCase
         card_acceptor_tax_id: '361531321',
         line_items: [{
           item_sequence_number: 1,
-          item_commodity_code: 300,
+          commodity_code: '041235',
           item_description: 'ramdom-object',
           product_code: 'TB123',
           quantity: 2,
@@ -343,6 +365,7 @@ class RemoteLitleTest < Test::Unit::TestCase
         customer_code: 'PO12345',
         card_acceptor_tax_id: '011234567',
         tax_amount: 50,
+        tax_included_in_total: true,
         line_items: [{
           item_description: 'ramdom-object',
           product_code: 'TB123',
@@ -450,6 +473,7 @@ class RemoteLitleTest < Test::Unit::TestCase
         network_transaction_id: network_transaction_id
       }
     )
+
     assert auth = @gateway.authorize(4999, credit_card, used_options)
     assert_success auth
     assert_equal 'Transaction Received: This is sent to acknowledge that the submitted transaction has been received.', auth.message
@@ -591,6 +615,12 @@ class RemoteLitleTest < Test::Unit::TestCase
     assert_equal 'Approved', capture.message
   end
 
+  def test_authorize_with_network_token
+    assert response = @gateway.authorize(10100, @decrypted_network_token)
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
   def test_purchase_with_stored_credential_cit_card_on_file_non_ecommerce
     credit_card = CreditCard.new(@credit_card_hash.merge(
                                    number: '4457000800000002',
@@ -629,6 +659,7 @@ class RemoteLitleTest < Test::Unit::TestCase
       }
     )
     assert auth = @gateway.purchase(4000, credit_card, used_options)
+
     assert_success auth
     assert_equal 'Approved', auth.message
   end
@@ -862,6 +893,17 @@ class RemoteLitleTest < Test::Unit::TestCase
 
     assert_scrubbed(@check.account_number, transcript)
     assert_scrubbed(@check.routing_number, transcript)
+    assert_scrubbed(@gateway.options[:login], transcript)
+    assert_scrubbed(@gateway.options[:password], transcript)
+  end
+
+  def test_network_token_scrubbing
+    transcript = capture_transcript(@gateway) do
+      @gateway.purchase(10010, @decrypted_network_token, @options)
+    end
+    transcript = @gateway.scrub(transcript)
+    assert_scrubbed(@decrypted_network_token.number, transcript)
+    assert_scrubbed(@decrypted_network_token.payment_cryptogram, transcript)
     assert_scrubbed(@gateway.options[:login], transcript)
     assert_scrubbed(@gateway.options[:password], transcript)
   end

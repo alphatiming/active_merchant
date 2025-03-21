@@ -24,13 +24,42 @@ class RemotePlexoTest < Test::Unit::TestCase
       },
       identification_type: '1',
       identification_value: '123456',
-      billing_address: address
+      billing_address: address,
+      invoice_number: '12345abcde'
     }
 
     @cancel_options = {
       description: 'Test desc',
       reason: 'requested by client'
     }
+
+    @network_token_credit_card = ActiveMerchant::Billing::NetworkTokenizationCreditCard.new({
+      first_name: 'Santiago', last_name: 'Navatta',
+        brand: 'Mastercard',
+        payment_cryptogram: 'UnVBR0RlYm42S2UzYWJKeWJBdWQ=',
+        number: '5555555555554444',
+        source: :network_token,
+        month: '12',
+        year: Time.now.year
+    })
+
+    @decrypted_network_token = NetworkTokenizationCreditCard.new(
+      {
+        first_name: 'Joe', last_name: 'Doe',
+        brand: 'visa',
+        payment_cryptogram: 'UnVBR0RlYm42S2UzYWJKeWJBdWQ=',
+        number: '5555555555554444',
+        source: :network_token,
+        month: '12',
+        year: Time.now.year
+      }
+    )
+  end
+
+  def test_successful_purchase_with_network_token
+    response = @gateway.purchase(@amount, @decrypted_network_token, @options.merge({ invoice_number: '12345abcde' }))
+    assert_success response
+    assert_equal 'You have been mocked.', response.message
   end
 
   def test_successful_purchase
@@ -41,6 +70,24 @@ class RemotePlexoTest < Test::Unit::TestCase
   def test_successful_purchase_with_finger_print
     response = @gateway.purchase(@amount, @credit_card, @options.merge({ finger_print: 'USABJHABSFASNJKN123532' }))
     assert_success response
+  end
+
+  def test_successful_purchase_with_invoice_number
+    response = @gateway.purchase(@amount, @credit_card, @options.merge({ invoice_number: '12345abcde' }))
+    assert_success response
+    assert_equal '12345abcde', response.params['invoiceNumber']
+  end
+
+  def test_successfully_send_merchant_id
+    # ensures that we can set and send the merchant_id and get a successful response
+    response = @gateway.purchase(@amount, @credit_card, @options.merge({ merchant_id: 3243 }))
+    assert_success response
+    assert_equal 3243, response.params['merchant']['id']
+
+    # ensures that we can set and send the merchant_id and expect a failed response for invalid merchant_id
+    response = @gateway.purchase(@amount, @credit_card, @options.merge({ merchant_id: 1234 }))
+    assert_failure response
+    assert_equal 'The requested Merchant was not found.', response.message
   end
 
   def test_failed_purchase
@@ -85,9 +132,12 @@ class RemotePlexoTest < Test::Unit::TestCase
   end
 
   def test_failed_capture
-    response = @gateway.capture(@amount, '123')
+    auth = @gateway.authorize(@amount, @declined_card, @options)
+    assert_failure auth
+
+    response = @gateway.capture(@amount, auth.authorization)
     assert_failure response
-    assert_equal 'An internal error occurred. Contact support.', response.message
+    assert_equal 'The selected payment state is not valid.', response.message
   end
 
   def test_successful_refund
@@ -107,9 +157,12 @@ class RemotePlexoTest < Test::Unit::TestCase
   end
 
   def test_failed_refund
-    response = @gateway.refund(@amount, '123', @cancel_options)
+    auth = @gateway.authorize(@amount, @declined_card, @options)
+    assert_failure auth
+
+    response = @gateway.refund(@amount, auth.authorization, @cancel_options)
     assert_failure response
-    assert_equal 'An internal error occurred. Contact support.', response.message
+    assert_equal 'The selected payment state is not valid.', response.message
   end
 
   def test_successful_void
@@ -121,9 +174,12 @@ class RemotePlexoTest < Test::Unit::TestCase
   end
 
   def test_failed_void
-    response = @gateway.void('123', @cancel_options)
+    auth = @gateway.authorize(@amount, @declined_card, @options)
+    assert_failure auth
+
+    response = @gateway.void(auth.authorization, @cancel_options)
     assert_failure response
-    assert_equal 'An internal error occurred. Contact support.', response.message
+    assert_equal 'The selected payment state is not valid.', response.message
   end
 
   def test_successful_verify
@@ -133,6 +189,11 @@ class RemotePlexoTest < Test::Unit::TestCase
 
   def test_successful_verify_with_custom_amount
     response = @gateway.verify(@credit_card, @options.merge({ verify_amount: '400' }))
+    assert_success response
+  end
+
+  def test_successful_verify_with_invoice_number
+    response = @gateway.verify(@credit_card, @options.merge({ invoice_number: '12345abcde' }))
     assert_success response
   end
 
@@ -261,6 +322,6 @@ class RemotePlexoTest < Test::Unit::TestCase
     assert_success purchase
 
     assert void = @gateway.void(purchase.authorization, @cancel_options)
-    assert_success void
+    assert_failure void
   end
 end
