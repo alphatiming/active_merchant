@@ -12,4 +12,5 @@ group :test, :remote_test do
   gem 'mechanize'
   gem 'timecop'
   gem 'xml-simple'
+  gem 'benchmark'
 end
